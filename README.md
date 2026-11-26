@@ -73,6 +73,20 @@ When a repo is set aside by a blocker, RepoSommelier proposes how to still use i
 | `cookies` | no substitute: getting past a bot check with browser cookies is bypassing a block (repos where cookies are optional stay, with a warning) |
 It never suggests proxies, cookie tricks, captcha solvers or anything that tricks a site into letting you in.
 
+## Hunt mode: keep searching until something works where you are
+```bash
+python3 hunt.py "watch YouTube videos (frames + audio) from a link" --where cloud \
+    --works-if "gemini" "file_uri|filedata|fileuri" "youtube" --rounds 5
+```
+- Round after round it adds new queries and reads **more sources**: GitHub repo search, **GitHub code search** (finds repos by
+  what their code really does, not by what the README promises), npm, Hugging Face Spaces, Hacker News stories **and comments**,
+  Lobsters, dev.to, and X/Reddit with a key.
+- `--works-if`: the evidence that a repo solves the need **without** your blockers (each group is "a|b|c"; all groups must match).
+  Without it, Gemini proposes the evidence.
+- It stops as soon as enough repos work; if none does, it hunts **connectors** with MCPSommelier.
+- Real example: watching YouTube in a cloud sandbox where `yt-dlp` is blocked. Four rounds of plain search found nothing;
+  code search found 41 repos that send the YouTube link straight to Gemini (no download), e.g. `aigentive/youtube-gemini-mcp`.
+
 ## Setup
 - Python 3.9+ (standard library only) and the GitHub CLI `gh`, logged in (`gh auth login`).
 - Optional: `GEMINI_API_KEY` (free from Google AI Studio). Without it there is no judge and queries come from a dictionary.

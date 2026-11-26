@@ -40,6 +40,9 @@ python3 reposommelier.py "..." --blockers yt-dlp gpu cookies
 ## Plan B: sustitutos legítimos de lo bloqueado
 Si un repo queda apartado, te dice cómo usarlo de todas formas **solo por caminos permitidos**: versión para CPU del mismo modelo (busca repos sustitutos, por ejemplo F5-TTS → F5-TTS-ONNX), modelo local en vez de API de pago, instalación directa en vez de Docker, o darle el archivo tú. Nunca propone proxies, trucos con cookies ni resolvedores de captcha.
 
+## Modo cacería (`hunt.py`): busca una y otra vez hasta que algo funcione donde estás
+Ronda tras ronda agrega búsquedas nuevas y lee más fuentes: búsqueda de repos y **búsqueda de código** de GitHub (encuentra repos por lo que su código hace de verdad), npm, Hugging Face Spaces, Hacker News (historias y comentarios), Lobsters, dev.to y X/Reddit con clave. Le dices la **evidencia** de que funciona (`--works-if`) y se detiene en cuanto encuentra; si no hay repo, busca **conectores** con MCPSommelier.
+
 Responde en el idioma en que preguntes; también puedes elegirlo con `--lang es`.
 
 **Seguridad:** solo **lee** datos públicos. Nunca clona, instala ni corre lo que encuentra. Revisa el código antes de usar cualquier repo.
