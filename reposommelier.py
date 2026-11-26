@@ -109,8 +109,8 @@ def guess_lang(text):
     if re.search(r"[一-鿿]", t): return "zh"
     if re.search(r"[぀-ヿ]", t): return "ja"
     if re.search(r"[Ѐ-ӿ]", t): return "ru"
-    if any(w in t for w in (" hacer ", " quiero ", " para ", " videos ", " con ", " ñ", "ción")): return "es"
-    if any(w in t for w in (" fazer ", " quero ", " ção", " vídeos ", " com ")): return "pt"
+    if any(w in t for w in (" fazer ", " quero ", "ção", " vídeos ", " com ", " não ", "ões")): return "pt"
+    if any(w in t for w in (" hacer ", " quiero ", " para ", " videos ", " con ", " que ", " en ", " el ", " la ", "ñ", "ción", "á", "é", "í", "ó", "ú")): return "es"
     return "en"
 
 
