@@ -1,0 +1,7 @@
+{
+ "who": "A person on their own laptop at home",
+ "hardware": "laptop with a small NVIDIA GPU (4-8 GB VRAM), home internet",
+ "rules": ["free", "license must allow commercial use", "never bypass a site's blocks"],
+ "blockers": ["cookies"],
+ "already_have": []
+}

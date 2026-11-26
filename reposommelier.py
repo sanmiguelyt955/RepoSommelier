@@ -62,17 +62,29 @@ L = {
             free="Best free & CPU-friendly", rising="Rising newcomer", cols="| # | Repo | Score | Tier | ⭐ | License | Updated | What it is | Judge | Warnings |",
             tiers=("Use now", "Adapt", "Study"), days="d", queries="Queries", saved="Saved",
             w=dict(nolic="⚠️ no clear license", copyleft="ℹ️ copyleft", nc="⚠️ non-commercial", gpu="🎮 needs GPU",
-                   paid="💳 paid API", agent="🤖 agent-ready", new="🆕 new", hot="🔥 trending")),
+                   paid="💳 paid API", agent="🤖 agent-ready", new="🆕 new", hot="🔥 trending"),
+            blocked="⛔ Does not work where you are TODAY", because="because it uses", partial="⚠️ works without",
+            loses="but loses part of its features", was_blocked="was set aside on", now_ok="no longer blocked here",
+            verified_ok="verified: {b} works here now, its repos are back in the ranking",
+            verified_bad="verified: {b} is still blocked here", where="Where"),
  "es": dict(title="Mejores repos para", cand="candidatos", drop="descartados", read="READMEs leídos", judge="juez", best="El mejor",
             free="Mejor gratis sin GPU", rising="Promesa nueva", cols="| # | Repo | Puntos | Nivel | ⭐ | Licencia | Cambió | Qué es | Juez | Avisos |",
             tiers=("Usar ya", "Adaptar", "Estudiar"), days="d", queries="Búsquedas", saved="Guardado",
             w=dict(nolic="⚠️ sin licencia clara", copyleft="ℹ️ copyleft", nc="⚠️ no comercial", gpu="🎮 necesita GPU",
-                   paid="💳 API de pago", agent="🤖 hecho para agentes", new="🆕 muy nuevo", hot="🔥 en tendencia")),
+                   paid="💳 API de pago", agent="🤖 hecho para agentes", new="🆕 muy nuevo", hot="🔥 en tendencia"),
+            blocked="⛔ No funcionan donde estás HOY", because="porque usa", partial="⚠️ funciona sin",
+            loses="pero pierde parte de lo que hace", was_blocked="estaba apartado el", now_ok="ya no está bloqueado aquí",
+            verified_ok="verificado: {b} ya funciona aquí, sus repos vuelven al ranking",
+            verified_bad="verificado: {b} sigue bloqueado aquí", where="Lugar"),
  "pt": dict(title="Melhores repos para", cand="candidatos", drop="descartados", read="READMEs lidos", judge="juiz", best="O melhor",
             free="Melhor grátis sem GPU", rising="Promessa nova", cols="| # | Repo | Pontos | Nível | ⭐ | Licença | Atualizado | O que é | Juiz | Avisos |",
             tiers=("Usar já", "Adaptar", "Estudar"), days="d", queries="Buscas", saved="Salvo",
             w=dict(nolic="⚠️ sem licença clara", copyleft="ℹ️ copyleft", nc="⚠️ não comercial", gpu="🎮 precisa de GPU",
-                   paid="💳 API paga", agent="🤖 feito para agentes", new="🆕 muito novo", hot="🔥 em alta")),
+                   paid="💳 API paga", agent="🤖 feito para agentes", new="🆕 muito novo", hot="🔥 em alta"),
+            blocked="⛔ Não funcionam onde você está HOJE", because="porque usa", partial="⚠️ funciona sem",
+            loses="mas perde parte do que faz", was_blocked="foi separado em", now_ok="não está mais bloqueado aqui",
+            verified_ok="verificado: {b} já funciona aqui, os repos voltam ao ranking",
+            verified_bad="verificado: {b} continua bloqueado aqui", where="Lugar"),
 }
 
 
@@ -184,6 +196,50 @@ def readme_signals(txt, terms):
     return s
 
 
+# ---------- blockers: a filter for TODAY and THIS place, never a blacklist ----------
+# Each blocker: words that show the repo needs it, and words that show it can work without it.
+BLOCKERS = {
+    "yt-dlp": (("yt-dlp", "youtube-dl", "yt_dlp"), ("without yt-dlp", "yt-dlp is optional", "optional: yt-dlp", "if yt-dlp is unavailable", "transcripts never require", "fallback")),
+    "gpu": (("requires a gpu", "gpu required", "requires cuda", "cuda is required", "minimum vram", "nvidia gpu with"), ("cpu only", "runs on cpu", "cpu mode", "cpu or gpu", "cpu and gpu", "device cpu")),
+    "paid": (("openai_api_key", "api key required", "paid plan", "subscription required"), ("free tier", "local model", "offline")),
+    "cookies": (("cookies-from-browser", "--cookies", "browser cookies", "cookies_from_browser"), ()),
+    "docker": (("docker run", "docker compose", "docker-compose"), ("without docker", "pip install", "npm install")),
+    "windows-only": (("windows only", "only works on windows"), ()),
+    "mac-only": (("macos only", "only works on macos", "apple silicon only"), ()),
+}
+
+
+def check_blockers(txt, blockers):
+    """Returns (hard, soft): blockers the repo NEEDS, and blockers it uses but can work without."""
+    t, hard, soft = txt.lower(), [], []
+    for b in blockers:
+        needs, alt = BLOCKERS.get(b, ((b.lower(),), ()))
+        if any(w in t for w in needs):
+            (soft if any(w in t for w in alt) else hard).append(b)
+    return hard, soft
+
+
+def verify_blocker(b):
+    """Tests whether a blocker is still real HERE, once, without bypassing anything. None = cannot be tested."""
+    if b == "yt-dlp":
+        import shutil, tempfile
+        if not shutil.which("yt-dlp"):
+            return None
+        d = tempfile.mkdtemp()
+        r = subprocess.run(["yt-dlp", "-q", "--no-warnings", "-f", "worst", "--download-sections", "*0-2", "-o", f"{d}/t.%(ext)s",
+                            "https://www.youtube.com/watch?v=jNQXAC9IVRw"], capture_output=True, text=True, timeout=120)
+        ok = r.returncode == 0 and any(Path(d).iterdir())
+        shutil.rmtree(d, ignore_errors=True)
+        return ok
+    if b == "gpu":
+        import shutil
+        return bool(shutil.which("nvidia-smi")) and subprocess.run(["nvidia-smi"], capture_output=True).returncode == 0
+    if b == "docker":
+        import shutil
+        return bool(shutil.which("docker"))
+    return None
+
+
 # ---------- scoring ----------
 def reject(r):
     if r.get("archived"): return "archived"
@@ -235,6 +291,9 @@ def main():
     ap.add_argument("--cpu", action="store_true", help="only repos that do not need a GPU")
     ap.add_argument("--free", action="store_true", help="only repos that do not need a paid API")
     ap.add_argument("--commercial", action="store_true", help="only permissive licenses (MIT, Apache, BSD...)")
+    ap.add_argument("--where", help="named place profile: data/profiles/<name>.json (e.g. cloud, laptop)")
+    ap.add_argument("--blockers", nargs="+", default=[], help="what does NOT work where you are today: yt-dlp gpu paid cookies docker windows-only mac-only (or any word)")
+    ap.add_argument("--verify", action="store_true", help="test each blocker first; if it works now, it is dropped")
     ap.add_argument("--md", help="save the table as Markdown")
     ap.add_argument("--json", action="store_true", help="machine-readable output for agents")
     ap.add_argument("--verdict", nargs="+", metavar=("REPO", "good|bad"))
@@ -252,9 +311,22 @@ def main():
     if a.history or not a.need:
         print(json.dumps(index, ensure_ascii=False, indent=1)); return
 
+    if a.where:
+        own, ex = DATA / "profiles" / f"{a.where}.json", HERE / "profiles" / f"{a.where}.json"
+        a.profile = str(own if own.exists() else ex)
+    prof_data = load(a.profile, {}) if a.profile else {}
+    blockers = list(dict.fromkeys([b.lower() for b in a.blockers] + [b.lower() for b in prof_data.get("blockers", [])]))
     queries, keys, origin, glang = (a.queries, [], "yours", None) if a.queries else plan_queries(a.need)
     lang = (a.lang or glang or guess_lang(a.need)).lower()[:2]
     T = L.get(lang, L["en"])
+    notes = []
+    if a.verify:
+        for b in list(blockers):
+            ok = verify_blocker(b)
+            if ok is True:
+                blockers.remove(b); notes.append(T["verified_ok"].format(b=b))
+            elif ok is False:
+                notes.append(T["verified_bad"].format(b=b))
     terms = list(dict.fromkeys(words(a.need + " " + " ".join(queries) + " " + " ".join(keys))))
     print(f"{T['queries']} ({origin}): {queries}", file=sys.stderr)
     cand, dropped = {}, {}
@@ -266,11 +338,14 @@ def main():
             why = reject(r)
             (dropped.__setitem__(n, why) if why else cand.__setitem__(n, r))
     first = sorted(cand.values(), key=lambda r: -score(r, terms, None, None, index["verdicts"])[0])[:25]
-    sig = {r["full_name"]: readme_signals(readme(r["full_name"]), terms) for r in first}
+    sig = {}
+    for r in first:
+        txt = readme(r["full_name"])
+        sig[r["full_name"]] = dict(readme_signals(txt, terms), _text=txt[:200_000])
     judge = {}
     if not a.no_judge and first:
         top10 = sorted(first, key=lambda r: -score(r, terms, sig[r["full_name"]], None, index["verdicts"])[0])[:10]
-        prof = load(a.profile, {}) if a.profile else {}
+        prof = dict(prof_data, blockers_today=blockers) if blockers else prof_data
         g = gemini_json("You choose GitHub repos for ONE specific person. Need: «" + a.need + "». "
                         + (f"Their profile (hardware, rules, what they already have): {json.dumps(prof, ensure_ascii=False)}. " if prof else "")
                         + "Rate 0-10 how well each repo works as the base for THIS need and THIS person (not its fame; lower the "
@@ -280,9 +355,18 @@ def main():
         for x in (g or {}).get("repos", []):
             if isinstance(x, dict) and x.get("repo") in sig:
                 judge[x["repo"]] = {"score": float(x.get("score", 5)), "reason": x.get("reason", "")}
-    rows = []
+    rows, blocked = [], []
+    texts = {}
+    prev = {}
+    for h in index.get("blocked", []):
+        prev.setdefault(h["repo"], h)
     for r in first:
         s = sig[r["full_name"]]
+        hard, soft = check_blockers(texts.get(r["full_name"], "") or s.get("_text", ""), blockers) if blockers else ([], [])
+        if hard:
+            blocked.append({"repo": r["full_name"], "url": r["html_url"], "uses": hard, "stars": r["stargazers_count"],
+                            "description": (r.get("description") or "")[:120]})
+            continue
         pts, lic = score(r, terms, s, judge.get(r["full_name"]), index["verdicts"])
         if (a.cpu and s.get("gpu")) or (a.free and s.get("paid")) or (a.commercial and lic not in PERMISSIVE):
             continue
@@ -292,18 +376,28 @@ def main():
                      "stars": r["stargazers_count"], "language": r.get("language"), "license": lic or "none",
                      "updated_days_ago": days(r["pushed_at"]), "description": (r.get("description") or "")[:150],
                      "judge": judge.get(r["full_name"]), "warnings": warnings(r, lic, s, T["w"]),
-                     "verdict": index["verdicts"].get(r["full_name"], {}).get("verdict"), "signals": s})
+                     "verdict": index["verdicts"].get(r["full_name"], {}).get("verdict"), "signals": {k: v for k, v in s.items() if k != "_text"}})
+        if soft:
+            rows[-1]["warnings"].append(f"{T['partial']} {', '.join(soft)}, {T['loses']}")
+        if r["full_name"] in prev and not hard:
+            rows[-1]["warnings"].append(f"ℹ️ {T['was_blocked']} {prev[r['full_name']]['date']} ({', '.join(prev[r['full_name']]['uses'])}); {T['now_ok']}")
     rows.sort(key=lambda x: -x["score"]); rows = rows[:a.top]
     picks = {"best": rows[0]["repo"] if rows else None,
              "best_free_cpu": next((x["repo"] for x in rows if not x["signals"]["gpu"] and not x["signals"]["paid"]
                                     and x["license"] in PERMISSIVE), None),
              "rising": next((x["repo"] for x in rows if any(v.startswith(("🆕", "🔥")) for v in x["warnings"])), None)}
+    hoy = f"{datetime.now():%Y-%m-%d}"
     index["searches"].append({"date": f"{datetime.now():%Y-%m-%d %H:%M}", "need": a.need, "lang": lang, "queries": queries,
-                              "top": [x["repo"] for x in rows[:5]], "picks": picks})
+                              "where": a.where, "blockers": blockers, "top": [x["repo"] for x in rows[:5]], "picks": picks})
+    index.setdefault("blocked", [])
+    for b in blocked:
+        index["blocked"].insert(0, {"date": hoy, "repo": b["repo"], "uses": b["uses"], "where": a.where or "-"})
+    index["blocked"] = index["blocked"][:500]
     INDEX.write_text(json.dumps(index, ensure_ascii=False, indent=1))
     if a.json:
         print(json.dumps({"need": a.need, "lang": lang, "candidates": len(cand) + len(dropped), "dropped": len(dropped),
-                          "picks": picks, "ranking": rows}, ensure_ascii=False, indent=1)); return
+                          "picks": picks, "ranking": rows,
+                          "blockers": blockers, "notes": notes, "blocked_today": blocked}, ensure_ascii=False, indent=1)); return
     out = [f"# {T['title']}: {a.need}", f"{len(cand) + len(dropped)} {T['cand']} · {len(dropped)} {T['drop']} · "
            f"{len(first)} {T['read']} · {T['judge']}: {'Gemini' if judge else '—'} · {datetime.now():%Y-%m-%d}", "",
            f"**{T['best']}:** {picks['best'] or '—'} · **{T['free']}:** {picks['best_free_cpu'] or '—'} · **{T['rising']}:** {picks['rising'] or '—'}", "",
@@ -312,6 +406,11 @@ def main():
         j = f"{x['judge']['score']:.0f}/10 {x['judge']['reason']}" if x["judge"] else ""
         out.append(f"| {i} | [{x['repo']}]({x['url']}) | {x['score']} | {x['tier']} | {x['stars']} | {x['license']} | "
                    f"{x['updated_days_ago']} {T['days']} | {x['description'].replace('|', '/')} | {j.replace('|', '/')} | {' '.join(x['warnings'])} |")
+    if notes:
+        out[2:2] = [" · ".join(notes), ""]
+    if blocked:
+        out += ["", f"## {T['blocked']}" + (f" ({T['where']}: {a.where})" if a.where else "")]
+        out += [f"- [{b['repo']}]({b['url']}) ({b['stars']}⭐) — {T['because']} **{', '.join(b['uses'])}** — {b['description'].replace('|', '/')}" for b in blocked]
     text = "\n".join(out)
     if a.md: Path(a.md).write_text(text + "\n", encoding="utf-8")
     print(text)

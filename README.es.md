@@ -20,6 +20,17 @@ python3 reposommelier.py --history
 6. Te da **3 recomendaciones**: el mejor, el mejor gratis sin GPU y la promesa nueva.
 7. **Aprende** de tus veredictos.
 
+## Bloqueos: lo que NO funciona donde estás HOY
+```bash
+python3 reposommelier.py "ver videos de YouTube" --where cloud --verify
+python3 reposommelier.py "..." --blockers yt-dlp gpu cookies
+```
+- **Nunca borra:** los repos bloqueados salen en una segunda lista, «⛔ No funcionan donde estás HOY», con la razón.
+- **Por búsqueda y por lugar:** perfiles `profiles/cloud.json` y `profiles/laptop.json` (o los tuyos en `data/profiles/`). Cada búsqueda empieza de cero.
+- Si un repo usa algo bloqueado pero **puede funcionar sin eso**, se queda con un aviso.
+- **`--verify`** prueba cada bloqueo una vez, sin saltarse nada. Si ya funciona, lo quita y te avisa.
+- El **historial** guarda la fecha y la razón, y te avisa si un repo apartado antes ya se puede usar.
+
 Responde en el idioma en que preguntes; también puedes elegirlo con `--lang es`.
 
 **Seguridad:** solo **lee** datos públicos. Nunca clona, instala ni corre lo que encuentra. Revisa el código antes de usar cualquier repo.

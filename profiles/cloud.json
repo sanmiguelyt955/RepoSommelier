@@ -1,0 +1,7 @@
+{
+ "who": "An AI agent (e.g. Claude Code) running in a cloud container",
+ "hardware": "cloud container, no GPU, datacenter IP",
+ "rules": ["free", "an AI agent must be able to use it alone", "never bypass a site's blocks"],
+ "blockers": ["yt-dlp", "gpu", "cookies"],
+ "already_have": []
+}

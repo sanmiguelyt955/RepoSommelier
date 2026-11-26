@@ -34,6 +34,19 @@ python3 reposommelier.py --verdict owner/repo good "worked great"   # teach it
 6. **Scores** 0-100 = relevance 35 + judge 15 + popularity 15 + activity 15 + health 10 + license 10 + your verdicts.
 7. **Returns** the ranking with tiers (**Use now** ≥70 · **Adapt** 55-69 · **Study** <55), warnings (🎮 GPU, 💳 paid API, ⚠️ non-commercial, 🆕 new, 🔥 trending, 🤖 agent-ready) and 3 picks: best overall, best free & CPU-friendly, rising newcomer.
 
+## Blockers: what does not work where you are TODAY
+Some repos are great but cannot run in your place (e.g. a cloud machine where YouTube blocks `yt-dlp`, or a laptop without a GPU).
+```bash
+python3 reposommelier.py "watch YouTube videos" --where cloud --verify      # place profile + test the blockers first
+python3 reposommelier.py "..." --blockers yt-dlp gpu cookies
+```
+- **Never deletes**: blocked repos go to a second list, *"⛔ Does not work where you are TODAY"*, with the reason.
+- **Per search, per place**: blockers come from `--blockers` or a place profile (`profiles/cloud.json`, `profiles/laptop.json`, or your own in `data/profiles/`). Next search starts fresh.
+- **Soft blockers**: if a repo uses something but can work without it, it stays in the ranking with a warning.
+- **`--verify`** tests each blocker once, without bypassing anything (e.g. a 2-second `yt-dlp` test on a public video, `nvidia-smi` for GPU). If it works now, the blocker is dropped and you are told.
+- **History** keeps the date and reason; when a repo set aside before is usable now, it says so.
+Known blockers: `yt-dlp`, `gpu`, `paid`, `cookies`, `docker`, `windows-only`, `mac-only` (any other word is matched in the README).
+
 ## Setup
 - Python 3.9+ (standard library only) and the GitHub CLI `gh`, logged in (`gh auth login`).
 - Optional: `GEMINI_API_KEY` (free from Google AI Studio). Without it there is no judge and queries come from a dictionary.
