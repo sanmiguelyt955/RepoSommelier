@@ -59,7 +59,7 @@ python3 reposommelier.py --trending                           # repos of the mom
 - **X and Reddit** (where most repos get shared) block anonymous servers. RepoSommelier reads them only through allowed
   ways, each optional with your own key: `FIRECRAWL_API_KEY` or `BRAVE_API_KEY` (web search that indexes public posts),
   `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET` (official Reddit API, free personal "script" app), `X_BEARER_TOKEN`
-  (official X API; recent search needs a paid tier). Without keys it tells you so; it never scrapes or uses cookies.
+  (official X API; recent search needs a paid tier). Without keys it tells you so; it never scrapes or uses cookies. In sandboxes where a proxy injects the key, set the variable to a placeholder (e.g. `FIRECRAWL_API_KEY=proxy-injected`).
 - Repos with suspiciously fast stars are flagged: star farms and malware bait exist.
 
 ## Plan B: legitimate substitutes for what is blocked

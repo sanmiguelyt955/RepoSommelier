@@ -630,7 +630,7 @@ def main():
         social, used = social_mentions(queries or [a.need], a.days)
         for k, v in social.items():
             mentions.setdefault(k, []).extend(v)
-        notes.append(("X/Reddit: " + ", ".join(used)) if used else
+        notes.append(("X/Reddit: " + ", ".join(dict.fromkeys(used))) if used else
                      {"es": "X/Reddit: sin acceso (bloquean servidores). Para leerlos, pon FIRECRAWL_API_KEY o BRAVE_API_KEY, o las claves oficiales de Reddit/X",
                       "pt": "X/Reddit: sem acesso (bloqueiam servidores). Defina FIRECRAWL_API_KEY ou BRAVE_API_KEY, ou as chaves oficiais"}.get(
                          lang, "X/Reddit: no access (they block servers). Set FIRECRAWL_API_KEY or BRAVE_API_KEY, or the official Reddit/X keys"))
@@ -690,7 +690,8 @@ def main():
         if r["full_name"] in mentions:
             ms = sorted(mentions[r["full_name"]], key=lambda m: -m["points"])
             rows[-1]["news"] = ms[:3]
-            rows[-1]["warnings"].append(f"📰 {ms[0]['source']} {ms[0]['points']} pts ({ms[0]['date']})")
+            rows[-1]["warnings"].append(f"📰 {ms[0]['source']}" + (f" {ms[0]['points']} pts" if ms[0]["source"] == "Hacker News" else "")
+                                        + (f" ({ms[0]['date']})" if ms[0]["date"] else "") + (f" +{len(ms) - 1}" if len(ms) > 1 else ""))
         if soft:
             rows[-1]["warnings"].append(f"{T['partial']} {', '.join(soft)}, {T['loses']}"
                                         + (" (" + {"es": "no actives su opción de cookies", "pt": "não ative a opção de cookies"}.get(lang, "do not turn on its cookies option") + ")" if "cookies" in soft else ""))
@@ -726,10 +727,12 @@ def main():
     if notes:
         out[2:2] = [" · ".join(notes), ""]
     linked = {m["link"] for ms in mentions.values() for m in ms}
-    other = sorted([h for h in NEWS_HITS if h["link"] not in linked and h["points"] >= 5], key=lambda h: -h["points"])[:10]
+    other = sorted([h for h in NEWS_HITS if h["link"] not in linked and (h["points"] >= 5 or h["source"] in ("X", "Reddit"))],
+                   key=lambda h: (h["source"] != "Hacker News", -h["points"]))[:12]
     if other:
         out += ["", "## 📰 " + {"es": "También en las noticias (fuera de GitHub o sin repo claro)", "pt": "Também nas notícias (fora do GitHub)"}.get(lang, "Also in the news (outside GitHub or no clear repo)")]
-        out += [f"- {h['points']} pts · {h['date']} · [{h['title']}]({h['url'] or h['link']}) ([HN]({h['link']}))" for h in other]
+        out += [f"- {h['source']} · " + (f"{h['points']} pts · " if h["source"] == "Hacker News" else "") + (f"{h['date']} · " if h["date"] else "")
+                + f"[{h['title']}]({h['url'] or h['link']})" + (f" ([HN]({h['link']}))" if h["source"] == "Hacker News" else "") for h in other]
     if blocked:
         out += ["", f"## {T['blocked']}" + (f" ({T['where']}: {a.where})" if a.where else "")]
         out += [f"- [{b['repo']}]({b['url']}) ({b['stars']}⭐) — {T['because']} **{', '.join(b['uses'])}** — {b['description'].replace('|', '/')}" for b in blocked]
