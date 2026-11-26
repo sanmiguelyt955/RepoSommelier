@@ -31,6 +31,14 @@ python3 reposommelier.py "..." --blockers yt-dlp gpu cookies
 - **`--verify`** prueba cada bloqueo una vez, sin saltarse nada. Si ya funciona, lo quita y te avisa.
 - El **historial** guarda la fecha y la razón, y te avisa si un repo apartado antes ya se puede usar.
 
+## Noticias y repos del momento
+- `--news`: además de GitHub, lee lo que se comenta en Hacker News, Lobsters y dev.to (últimos 120 días).
+- `--trending`: los repos del momento (últimos 7 días), revisados contra tu perfil. GitHub Trending bloquea servidores; su sustituto legítimo es la búsqueda oficial de GitHub.
+- Marca los repos con estrellas sospechosamente rápidas (a veces son falsas o trampas con malware).
+
+## Plan B: sustitutos legítimos de lo bloqueado
+Si un repo queda apartado, te dice cómo usarlo de todas formas **solo por caminos permitidos**: versión para CPU del mismo modelo (busca repos sustitutos, por ejemplo F5-TTS → F5-TTS-ONNX), modelo local en vez de API de pago, instalación directa en vez de Docker, o darle el archivo tú. Nunca propone proxies, trucos con cookies ni resolvedores de captcha.
+
 Responde en el idioma en que preguntes; también puedes elegirlo con `--lang es`.
 
 **Seguridad:** solo **lee** datos públicos. Nunca clona, instala ni corre lo que encuentra. Revisa el código antes de usar cualquier repo.

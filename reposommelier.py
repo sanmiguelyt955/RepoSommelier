@@ -34,6 +34,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -196,13 +197,130 @@ def readme_signals(txt, terms):
     return s
 
 
+# ---------- news: what people are talking about (Hacker News, Lobsters, dev.to) ----------
+GH_RE = re.compile(r"github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)")
+NOT_REPOS = {"orgs", "topics", "features", "sponsors", "settings", "marketplace", "about", "trending", "collections", "apps", "login"}
+
+
+def _get_json(url):
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
+            return json.loads(r.read())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _repo_from(text):
+    for o, n in GH_RE.findall(text or ""):
+        n = re.sub(r"\.git$", "", n).rstrip(".")
+        if o.lower() not in NOT_REPOS and n:
+            return f"{o}/{n}"
+    return None
+
+
+NEWS_HITS = []   # every news item read (also the ones that point to Hugging Face, blogs...)
+NEWS_TERMS = set()   # words that make a news item relevant to the current need
+
+
+def relevant(h):
+    hay = (h.get("title", "") + " " + h.get("url", "")).lower()
+    return not NEWS_TERMS or any(re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", hay) for t in NEWS_TERMS)
+
+
+def news_mentions(topics, days=120):
+    """Repos mentioned in recent news/forums about the topics. Returns {owner/repo: [mentions]}."""
+    found = {}
+    since = int(time.time()) - days * 86400
+    for q in topics:
+        url = ("https://hn.algolia.com/api/v1/search?tags=story&hitsPerPage=50&numericFilters=created_at_i>" + str(since)
+               + "&query=" + urllib.parse.quote(q))
+        for h in (_get_json(url) or {}).get("hits", []):
+            if not relevant({"title": h.get("title") or "", "url": h.get("url") or ""}):
+                continue
+            NEWS_HITS.append({"source": "Hacker News", "title": h.get("title") or "", "url": h.get("url") or "",
+                              "points": h.get("points") or 0, "date": (h.get("created_at") or "")[:10],
+                              "link": f"https://news.ycombinator.com/item?id={h.get('objectID')}"})
+            repo = _repo_from(h.get("url")) or _repo_from(h.get("story_text"))
+            if repo:
+                found.setdefault(repo, []).append({"source": "Hacker News", "title": h.get("title"), "points": h.get("points") or 0,
+                                                   "date": (h.get("created_at") or "")[:10],
+                                                   "link": f"https://news.ycombinator.com/item?id={h.get('objectID')}"})
+        time.sleep(0.5)
+    return found
+
+
+def trending_news(days=7):
+    """Repos of the moment: GitHub links on Hacker News (last days) and Lobsters' hottest."""
+    found = {}
+    since = int(time.time()) - days * 86400
+    for page in range(3):
+        d = _get_json(f"https://hn.algolia.com/api/v1/search?query=github.com&restrictSearchableAttributes=url&tags=story"
+                      f"&hitsPerPage=100&page={page}&numericFilters=created_at_i>{since}") or {}
+        for h in d.get("hits", []):
+            repo = _repo_from(h.get("url"))
+            if repo:
+                found.setdefault(repo, []).append({"source": "Hacker News", "title": h.get("title"), "points": h.get("points") or 0,
+                                                   "date": (h.get("created_at") or "")[:10],
+                                                   "link": f"https://news.ycombinator.com/item?id={h.get('objectID')}"})
+    # github.com/trending blocks servers: its legitimate substitute is the official search API
+    # (new repos of the period, sorted by stars).
+    since_date = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%d")
+    for r in search(f"created:>{since_date} stars:>50")[:40]:
+        found.setdefault(r["full_name"], []).append({"source": "GitHub (official search, substitute for Trending)",
+                                                      "title": r.get("description") or r["full_name"], "points": r["stargazers_count"],
+                                                      "date": r["created_at"][:10], "link": r["html_url"]})
+    for h in _get_json("https://lobste.rs/hottest.json") or []:
+        repo = _repo_from(h.get("url"))
+        if repo:
+            found.setdefault(repo, []).append({"source": "Lobsters", "title": h.get("title"), "points": h.get("score") or 0,
+                                               "date": (h.get("created_at") or "")[:10], "link": h.get("short_id_url")})
+    for a in _get_json("https://dev.to/api/articles?tag=opensource&top=7&per_page=60") or []:
+        repo = _repo_from(a.get("url")) or _repo_from(a.get("description"))
+        if repo:
+            found.setdefault(repo, []).append({"source": "dev.to", "title": a.get("title"), "points": a.get("positive_reactions_count") or 0,
+                                               "date": (a.get("published_at") or "")[:10], "link": a.get("url")})
+    return found
+
+
+def lookup_repos(names):
+    """GitHub metadata for repos found in the news (through the search API: repo:owner/name)."""
+    out = []
+    for i in range(0, len(names), 5):
+        q = " ".join(f"repo:{n}" for n in names[i:i + 5])
+        out += search(q)
+        time.sleep(2.2)
+    return out
+
+
+def match_by_name(cand_names):
+    """A news item mentions a repo if it links to github.com/owner/name, or its URL/title contains owner/name or a
+    distinctive repo name (5+ chars, e.g. 'tiny-voca' on huggingface.co/n4ze3m/tiny-voca)."""
+    out = {}
+    for n in cand_names:
+        owner, name = n.lower().split("/", 1)
+        for h in NEWS_HITS:
+            hay = (h["url"] + " " + h["title"]).lower()
+            generic = all(t in NEWS_TERMS or t in STOP for t in re.split(r"[-_.]", name) if t)
+            if f"{owner}/{name}" in hay or (len(name) >= 5 and not generic and re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", hay)):
+                m = {k: h[k] for k in ("source", "title", "points", "date", "link")}
+                if m not in out.setdefault(n, []):
+                    out[n].append(m)
+    return out
+
+
+def buzz(mentions):
+    pts = sum(m["points"] for m in mentions)
+    return min(1.0, math.log10(pts + 1) / 3)          # ~1000 points = max
+
+
 # ---------- blockers: a filter for TODAY and THIS place, never a blacklist ----------
 # Each blocker: words that show the repo needs it, and words that show it can work without it.
 BLOCKERS = {
     "yt-dlp": (("yt-dlp", "youtube-dl", "yt_dlp"), ("without yt-dlp", "yt-dlp is optional", "optional: yt-dlp", "if yt-dlp is unavailable", "transcripts never require", "fallback")),
-    "gpu": (("requires a gpu", "gpu required", "requires cuda", "cuda is required", "minimum vram", "nvidia gpu with"), ("cpu only", "runs on cpu", "cpu mode", "cpu or gpu", "cpu and gpu", "device cpu")),
+    "gpu": (("requires a gpu", "gpu required", "requires cuda", "cuda is required", "minimum vram", "nvidia gpu with"), ("cpu only", "runs on cpu", "on cpu", "cpu mode", "cpu or gpu", "cpu and gpu", "device cpu", "cpu inference")),
     "paid": (("openai_api_key", "api key required", "paid plan", "subscription required"), ("free tier", "local model", "offline")),
-    "cookies": (("cookies-from-browser", "--cookies", "browser cookies", "cookies_from_browser"), ()),
+    "cookies": (("cookies-from-browser", "--cookies", "browser cookies", "cookies_from_browser"),
+                ("optional", "if you need", "for private", "age-restricted", "members-only", "login-walled", "")),   # cookies are almost always an option: warn, do not set aside
     "docker": (("docker run", "docker compose", "docker-compose"), ("without docker", "pip install", "npm install")),
     "windows-only": (("windows only", "only works on windows"), ()),
     "mac-only": (("macos only", "only works on macos", "apple silicon only"), ()),
@@ -215,7 +333,7 @@ def check_blockers(txt, blockers):
     for b in blockers:
         needs, alt = BLOCKERS.get(b, ((b.lower(),), ()))
         if any(w in t for w in needs):
-            (soft if any(w in t for w in alt) else hard).append(b)
+            (soft if (b == "cookies" or any(w in t for w in alt if w)) else hard).append(b)
     return hard, soft
 
 
@@ -238,6 +356,58 @@ def verify_blocker(b):
         import shutil
         return bool(shutil.which("docker"))
     return None
+
+
+# Plan B for a blocker: a LEGITIMATE substitute that gives the same result another allowed way.
+# Never proxies, cookies, captcha solvers or anything that tricks a site into letting you in (that is bypassing a block).
+SUBSTITUTES = {
+    "gpu": {"how": {"en": "use a CPU port of the same model (ONNX / C++), or rent a GPU per second only for that step",
+                    "es": "usa una versión para CPU del mismo modelo (ONNX / C++), o renta una GPU por segundo solo para ese paso"},
+            "search": ["{name} cpu", "{name} onnx", "{name} cpp"]},
+    "paid": {"how": {"en": "swap the paid API for a free local model or a free tier", "es": "cambia la API de pago por un modelo local gratis o una capa gratuita"},
+             "search": ["{name} local", "{name} ollama", "{name} offline"]},
+    "docker": {"how": {"en": "install it natively (pip / npm) instead of Docker", "es": "instálalo directo (pip / npm) en vez de Docker"},
+               "search": ["{name} pip", "{name} npm"]},
+    "yt-dlp": {"how": {"en": "keep the repo and give it the video another allowed way: a file you upload, or run that step on a computer at home",
+                       "es": "conserva el repo y dale el video por otro camino permitido: un archivo que tú subas, o corre ese paso en una computadora de tu casa"},
+               "search": []},
+    "cookies": {"how": {"en": "no substitute: using browser cookies to get past a site's bot check is bypassing a block",
+                        "es": "sin sustituto: usar cookies del navegador para pasar el «no eres un bot» es saltarse un bloqueo"},
+                "search": []},
+}
+
+
+def plan_b(blocked_rows, lang, limit=6):
+    """For each blocked repo, a legitimate way to still use it, plus substitute repos when a search makes sense."""
+    out = []
+    for b in blocked_rows[:limit]:
+        name = b["repo"].split("/")[1]
+        name = re.sub(r"(?i)[-_]?(fastapi|webui|mcp|server|cli|app|studio)$", "", name) or name
+        # the model/tool it is built on is a better search key than the repo name (e.g. "F5-TTS", "Qwen3-TTS", "kokoro")
+        generic = re.compile(r"(?i)^(zero-shot|real-time|open-source|web-?ui|text-to-\w+|speech-to-\w+|end-to-end|state-of-the-art|"
+                             r"multi-\w+|\d+[bkm]-?(parameter|param)s?|llm-based|\w+-based|gradio-\w+|high-\w+|low-\w+|one-click)$")
+        bases = [t for t in re.findall(r"[A-Za-z][\w.]*\d[\w.-]*|[A-Za-z]+-[A-Za-z0-9]+", b.get("description", ""))
+                 if len(t) >= 3 and t.lower() not in STOP and not generic.match(t)][:2] + [name]
+        steps = []
+        for blk in b["uses"]:
+            sub = SUBSTITUTES.get(blk)
+            if not sub:
+                steps.append({"blocker": blk, "how": "-", "candidates": []}); continue
+            cands = []
+            for base, q in ([(base, sub["search"][i % len(sub["search"])].format(name=base)) for i, base in enumerate(bases[:2])]
+                            if sub["search"] else []):
+                for r in search(q)[:8]:
+                    hay = (r["full_name"] + " " + (r.get("description") or "")).lower()
+                    if base.lower().split("-")[0] not in hay:      # a substitute must be about the same model/tool
+                        continue
+                    if r["full_name"] != b["repo"] and not reject(r) and r["full_name"] not in [c["repo"] for c in cands]:
+                        cands.append({"repo": r["full_name"], "url": r["html_url"], "stars": r["stargazers_count"],
+                                      "description": (r.get("description") or "")[:100]})
+                time.sleep(2.2)
+            steps.append({"blocker": blk, "how": sub["how"].get(lang, sub["how"]["en"]),
+                          "candidates": sorted(cands, key=lambda c: -c["stars"])[:2]})
+        out.append({"repo": b["repo"], "steps": steps})
+    return out
 
 
 # ---------- scoring ----------
@@ -277,6 +447,8 @@ def warnings(r, lic, s, w):
     age = max(1, days(r["created_at"]))
     if age < 60: a.append(w["new"])
     if r["stargazers_count"] / age > 20: a.append(f"{w['hot']} ({round(r['stargazers_count'] / age)}⭐/{L['en']['days']})")
+    if age < 30 and r["stargazers_count"] / age > 40:
+        a.append("⚠️ stars grew very fast: sometimes fake (star farms) or malware bait, check it carefully")
     return a
 
 
@@ -294,6 +466,9 @@ def main():
     ap.add_argument("--where", help="named place profile: data/profiles/<name>.json (e.g. cloud, laptop)")
     ap.add_argument("--blockers", nargs="+", default=[], help="what does NOT work where you are today: yt-dlp gpu paid cookies docker windows-only mac-only (or any word)")
     ap.add_argument("--verify", action="store_true", help="test each blocker first; if it works now, it is dropped")
+    ap.add_argument("--news", action="store_true", help="also look in the news (Hacker News, Lobsters, dev.to) for repos people talk about")
+    ap.add_argument("--trending", action="store_true", help="repos of the moment (last 7 days of news), checked against your profile")
+    ap.add_argument("--days", type=int, default=120, help="how far back to read the news (default 120; --trending uses 7)")
     ap.add_argument("--md", help="save the table as Markdown")
     ap.add_argument("--json", action="store_true", help="machine-readable output for agents")
     ap.add_argument("--verdict", nargs="+", metavar=("REPO", "good|bad"))
@@ -308,6 +483,9 @@ def main():
         index["verdicts"][repo] = {"verdict": "good" if good else "bad", "note": " ".join(a.verdict[2:]),
                                    "shift": 8 if good else -15, "date": f"{datetime.now():%Y-%m-%d}"}
         INDEX.write_text(json.dumps(index, ensure_ascii=False, indent=1)); print(f"Saved: {repo} = {index['verdicts'][repo]['verdict']}"); return
+    only_trending = a.trending and not a.need
+    if only_trending:
+        a.need = "the best and most talked-about new open-source repos of the moment"
     if a.history or not a.need:
         print(json.dumps(index, ensure_ascii=False, indent=1)); return
 
@@ -316,7 +494,8 @@ def main():
         a.profile = str(own if own.exists() else ex)
     prof_data = load(a.profile, {}) if a.profile else {}
     blockers = list(dict.fromkeys([b.lower() for b in a.blockers] + [b.lower() for b in prof_data.get("blockers", [])]))
-    queries, keys, origin, glang = (a.queries, [], "yours", None) if a.queries else plan_queries(a.need)
+    queries, keys, origin, glang = ((a.queries, [], "yours", None) if a.queries else
+                                    ([], [], "news only", None) if only_trending else plan_queries(a.need))
     lang = (a.lang or glang or guess_lang(a.need)).lower()[:2]
     T = L.get(lang, L["en"])
     notes = []
@@ -337,7 +516,24 @@ def main():
             if n in cand or n in dropped: continue
             why = reject(r)
             (dropped.__setitem__(n, why) if why else cand.__setitem__(n, r))
-    first = sorted(cand.values(), key=lambda r: -score(r, terms, None, None, index["verdicts"])[0])[:25]
+    mentions = {}
+    GENERIC = {"open", "source", "fast", "free", "english", "model", "models", "tool", "best", "new", "simple", "local",
+               "python", "code", "library", "app", "web", "api", "github", "repo", "easy", "cpu", "gpu", "real", "time"}
+    NEWS_TERMS.update(t for t in words(" ".join(queries) + " " + " ".join(keys)) if len(t) >= 3 and t not in GENERIC)
+    if a.news or a.trending:
+        mentions = trending_news(min(a.days, 7) if a.trending and not a.news else a.days) if a.trending else news_mentions(queries[:4], a.days)
+        top_news = sorted(mentions, key=lambda n: -sum(m["points"] for m in mentions[n]))[:25]
+        known = {n.lower() for n in cand} | {n.lower() for n in dropped}
+        for r in lookup_repos([n for n in top_news if n.lower() not in known]):
+            if r["full_name"] in cand or r["full_name"] in dropped: continue
+            why = reject(r)
+            (dropped.__setitem__(r["full_name"], why) if why else cand.__setitem__(r["full_name"], r))
+        low = {k.lower(): v for k, v in mentions.items()}
+        by_name = match_by_name(list(cand))
+        mentions = {n: low.get(n.lower(), []) + [m for m in by_name.get(n, []) if m not in low.get(n.lower(), [])]
+                    for n in cand if n.lower() in low or n in by_name}
+    first = sorted(cand.values(), key=lambda r: -(score(r, terms, None, None, index["verdicts"])[0]
+                                                  + 40 * buzz(mentions.get(r["full_name"], []))))[:25]
     sig = {}
     for r in first:
         txt = readme(r["full_name"])
@@ -370,6 +566,8 @@ def main():
         pts, lic = score(r, terms, s, judge.get(r["full_name"]), index["verdicts"])
         if (a.cpu and s.get("gpu")) or (a.free and s.get("paid")) or (a.commercial and lic not in PERMISSIVE):
             continue
+        if r["full_name"] in mentions:
+            pts += round(8 * buzz(mentions[r["full_name"]]))
         pts = max(0, min(100, pts))
         rows.append({"repo": r["full_name"], "url": r["html_url"], "score": pts,
                      "tier": T["tiers"][0] if pts >= 70 else T["tiers"][1] if pts >= 55 else T["tiers"][2],
@@ -377,8 +575,13 @@ def main():
                      "updated_days_ago": days(r["pushed_at"]), "description": (r.get("description") or "")[:150],
                      "judge": judge.get(r["full_name"]), "warnings": warnings(r, lic, s, T["w"]),
                      "verdict": index["verdicts"].get(r["full_name"], {}).get("verdict"), "signals": {k: v for k, v in s.items() if k != "_text"}})
+        if r["full_name"] in mentions:
+            ms = sorted(mentions[r["full_name"]], key=lambda m: -m["points"])
+            rows[-1]["news"] = ms[:3]
+            rows[-1]["warnings"].append(f"📰 {ms[0]['source']} {ms[0]['points']} pts ({ms[0]['date']})")
         if soft:
-            rows[-1]["warnings"].append(f"{T['partial']} {', '.join(soft)}, {T['loses']}")
+            rows[-1]["warnings"].append(f"{T['partial']} {', '.join(soft)}, {T['loses']}"
+                                        + (" (" + {"es": "no actives su opción de cookies", "pt": "não ative a opção de cookies"}.get(lang, "do not turn on its cookies option") + ")" if "cookies" in soft else ""))
         if r["full_name"] in prev and not hard:
             rows[-1]["warnings"].append(f"ℹ️ {T['was_blocked']} {prev[r['full_name']]['date']} ({', '.join(prev[r['full_name']]['uses'])}); {T['now_ok']}")
     rows.sort(key=lambda x: -x["score"]); rows = rows[:a.top]
@@ -386,6 +589,7 @@ def main():
              "best_free_cpu": next((x["repo"] for x in rows if not x["signals"]["gpu"] and not x["signals"]["paid"]
                                     and x["license"] in PERMISSIVE), None),
              "rising": next((x["repo"] for x in rows if any(v.startswith(("🆕", "🔥")) for v in x["warnings"])), None)}
+    plans = plan_b(blocked, lang) if blocked else []
     hoy = f"{datetime.now():%Y-%m-%d}"
     index["searches"].append({"date": f"{datetime.now():%Y-%m-%d %H:%M}", "need": a.need, "lang": lang, "queries": queries,
                               "where": a.where, "blockers": blockers, "top": [x["repo"] for x in rows[:5]], "picks": picks})
@@ -397,7 +601,8 @@ def main():
     if a.json:
         print(json.dumps({"need": a.need, "lang": lang, "candidates": len(cand) + len(dropped), "dropped": len(dropped),
                           "picks": picks, "ranking": rows,
-                          "blockers": blockers, "notes": notes, "blocked_today": blocked}, ensure_ascii=False, indent=1)); return
+                          "blockers": blockers, "notes": notes, "blocked_today": blocked, "plan_b": plans,
+                          "news_outside_github": sorted(NEWS_HITS, key=lambda h: -h["points"])[:15]}, ensure_ascii=False, indent=1)); return
     out = [f"# {T['title']}: {a.need}", f"{len(cand) + len(dropped)} {T['cand']} · {len(dropped)} {T['drop']} · "
            f"{len(first)} {T['read']} · {T['judge']}: {'Gemini' if judge else '—'} · {datetime.now():%Y-%m-%d}", "",
            f"**{T['best']}:** {picks['best'] or '—'} · **{T['free']}:** {picks['best_free_cpu'] or '—'} · **{T['rising']}:** {picks['rising'] or '—'}", "",
@@ -408,9 +613,21 @@ def main():
                    f"{x['updated_days_ago']} {T['days']} | {x['description'].replace('|', '/')} | {j.replace('|', '/')} | {' '.join(x['warnings'])} |")
     if notes:
         out[2:2] = [" · ".join(notes), ""]
+    linked = {m["link"] for ms in mentions.values() for m in ms}
+    other = sorted([h for h in NEWS_HITS if h["link"] not in linked and h["points"] >= 5], key=lambda h: -h["points"])[:10]
+    if other:
+        out += ["", "## 📰 " + {"es": "También en las noticias (fuera de GitHub o sin repo claro)", "pt": "Também nas notícias (fora do GitHub)"}.get(lang, "Also in the news (outside GitHub or no clear repo)")]
+        out += [f"- {h['points']} pts · {h['date']} · [{h['title']}]({h['url'] or h['link']}) ([HN]({h['link']}))" for h in other]
     if blocked:
         out += ["", f"## {T['blocked']}" + (f" ({T['where']}: {a.where})" if a.where else "")]
         out += [f"- [{b['repo']}]({b['url']}) ({b['stars']}⭐) — {T['because']} **{', '.join(b['uses'])}** — {b['description'].replace('|', '/')}" for b in blocked]
+    if plans:
+        out += ["", "## 🔁 " + {"es": "Plan B: cómo usarlos de todas formas (solo caminos permitidos)",
+                                 "pt": "Plano B: como usá-los mesmo assim (só caminhos permitidos)"}.get(lang, "Plan B: how to use them anyway (allowed ways only)")]
+        for pl in plans:
+            for st in pl["steps"]:
+                alt = "; ".join(f"[{c['repo']}]({c['url']}) ({c['stars']}⭐)" for c in st["candidates"])
+                out.append(f"- **{pl['repo']}** · {st['blocker']}: {st['how']}" + (f" → {alt}" if alt else ""))
     text = "\n".join(out)
     if a.md: Path(a.md).write_text(text + "\n", encoding="utf-8")
     print(text)

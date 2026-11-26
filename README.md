@@ -47,6 +47,28 @@ python3 reposommelier.py "..." --blockers yt-dlp gpu cookies
 - **History** keeps the date and reason; when a repo set aside before is usable now, it says so.
 Known blockers: `yt-dlp`, `gpu`, `paid`, `cookies`, `docker`, `windows-only`, `mac-only` (any other word is matched in the README).
 
+## News and repos of the moment
+```bash
+python3 reposommelier.py "text to speech on CPU" --news      # also reads what people talk about (last 120 days)
+python3 reposommelier.py --trending                           # repos of the moment (last 7 days), checked against your profile
+```
+- Sources: Hacker News, Lobsters and dev.to, plus the official GitHub search as the substitute for github.com/trending
+  (which blocks servers). Reddit also blocks servers and is not used.
+- A news item counts for a repo when it links to it or names it (distinctive names only). Relevant news about projects
+  outside GitHub (Hugging Face, blogs) is listed in its own section.
+- Repos with suspiciously fast stars are flagged: star farms and malware bait exist.
+
+## Plan B: legitimate substitutes for what is blocked
+When a repo is set aside by a blocker, RepoSommelier proposes how to still use it, **only through allowed ways**:
+| Blocker | Plan B |
+|---|---|
+| `gpu` | a CPU port of the same model (ONNX / C++), searched by the model it is built on (e.g. F5-TTS → F5-TTS-ONNX), or rent a GPU per second |
+| `paid` | a free local model or free tier |
+| `docker` | a native install (pip / npm) |
+| `yt-dlp` | keep the repo, feed it a file you upload or run that step on a computer at home |
+| `cookies` | no substitute: getting past a bot check with browser cookies is bypassing a block (repos where cookies are optional stay, with a warning) |
+It never suggests proxies, cookie tricks, captcha solvers or anything that tricks a site into letting you in.
+
 ## Setup
 - Python 3.9+ (standard library only) and the GitHub CLI `gh`, logged in (`gh auth login`).
 - Optional: `GEMINI_API_KEY` (free from Google AI Studio). Without it there is no judge and queries come from a dictionary.

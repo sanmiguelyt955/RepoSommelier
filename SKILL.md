@@ -10,7 +10,9 @@ description: Find the best GitHub repos for a need (any language), ranked for th
 2. Pass where it will run: `--where cloud|laptop` (or `--blockers yt-dlp gpu ...`) and `--verify`.
    Run `python3 reposommelier.py "<need>" --json --top 10` (needs `gh` logged in; `GEMINI_API_KEY` optional).
 3. Read `notes` (verified blockers), `blocked_today` (set aside, with reasons; never present them as recommended), `picks` and, for the top 3, `judge.reason`, `license`, `warnings` and `signals`.
-4. Answer in the user's language: the top 3 with one line each (what it is, why it fits, warnings), then the 3 picks.
+4. Add `--news` when the user wants what is new or talked about; `--trending` for repos of the moment.
+   Read `plan_b`: legitimate substitutes for blocked repos (never present a bypass).
+5. Answer in the user's language: the top 3 with one line each (what it is, why it fits, warnings), then the 3 picks.
    Say clearly if a license is non-commercial, copyleft or missing.
-5. Never clone, install or run a recommended repo without the user's OK, and read its code first.
-6. When the user says a repo worked (or failed), record it: `python3 reposommelier.py --verdict owner/repo good|bad "note"`.
+6. Never clone, install or run a recommended repo without the user's OK, and read its code first.
+7. When the user says a repo worked (or failed), record it: `python3 reposommelier.py --verdict owner/repo good|bad "note"`.
