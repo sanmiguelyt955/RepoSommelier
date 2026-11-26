@@ -1,0 +1,7 @@
+{
+ "who": "Content creator: animated shorts in EN/ES/PT, wants to monetize on YouTube/TikTok",
+ "hardware": "Laptop with an RTX 3050 (4-8 GB VRAM); cloud without GPU; can rent a GPU per second if worth it",
+ "rules": ["free or almost free", "license must allow making money", "an AI agent must be able to use it alone",
+           "prefer CPU or small GPU", "explanations in Spanish"],
+ "already_have": ["earshot", "pixelfx", "Blender MCP", "HyperFrames", "own three.js 2.5D engine", "Remotion", "yt-dlp", "whisper"]
+}

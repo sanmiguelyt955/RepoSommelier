@@ -1,0 +1,4 @@
+data/*
+!data/profile.example.json
+__pycache__/
+*.pyc

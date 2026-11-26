@@ -1,0 +1,25 @@
+# 🍷 RepoSommelier (español)
+
+**El buscador inteligente de repos de GitHub para personas e IAs.** Dile lo que quieres hacer, **en cualquier idioma**, y te da **los mejores repos para tu necesidad**, del mejor al peor. Te explica por qué, te dice la verdad de la licencia y te avisa de lo importante.
+
+> Un sumiller no te sirve el vino más caro: te sirve el mejor para *tu* platillo, *tu* gusto y *tu* presupuesto.
+
+```bash
+python3 reposommelier.py "hacer videos 3D animados con código"
+python3 reposommelier.py "transcribir audio en español" --cpu --free --commercial   # sin GPU, gratis, deja ganar dinero
+python3 reposommelier.py --verdict owner/repo good "nos funcionó"                     # le enseñas (good/bueno o bad/malo)
+python3 reposommelier.py --history
+```
+
+## Qué hace
+1. **Entiende** tu necesidad en cualquier idioma y escribe 6 búsquedas cortas con nombres de herramientas reales.
+2. **Busca** en GitHub y **descarta** lo que no sirve: archivados, copias (forks), listas «awesome», sin código, abandonados y de juguete.
+3. **Lee el README** de los 25 mejores: si se instala fácil, si tiene demo, si pide GPU o una API de pago, si tiene pruebas y si está hecho para agentes.
+4. Un **juez** (Gemini) califica de 0 a 10 qué tanto te sirve cada repo **a ti**, usando tu perfil (`data/profile.json`: tu equipo, tus reglas y lo que ya tienes).
+5. **Puntúa** de 0 a 100 y lo pone en un nivel: **Usar ya**, **Adaptar** o **Estudiar**.
+6. Te da **3 recomendaciones**: el mejor, el mejor gratis sin GPU y la promesa nueva.
+7. **Aprende** de tus veredictos.
+
+Responde en el idioma en que preguntes; también puedes elegirlo con `--lang es`.
+
+**Seguridad:** solo **lee** datos públicos. Nunca clona, instala ni corre lo que encuentra. Revisa el código antes de usar cualquier repo.
