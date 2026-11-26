@@ -84,6 +84,11 @@ python3 hunt.py "watch YouTube videos (frames + audio) from a link" --where clou
 - `--works-if`: the evidence that a repo solves the need **without** your blockers (each group is "a|b|c"; all groups must match).
   Without it, Gemini proposes the evidence.
 - It stops as soon as enough repos work; if none does, it hunts **connectors** with MCPSommelier.
+- **Several targets at once** with `--want label=group;group;!excluded` (e.g. one target *with* Gemini and one *without*:
+  `--want "gemini=gemini;file_uri|filedata;youtube" --want "no-gemini=youtube;transcript|storyboard;!gemini"`). It keeps going
+  until every target has `--min-found` results.
+- **Real tests win**: `--tested owner/repo works "note"` (or `fails`) records what you actually tried; tested repos float up or
+  sink in later hunts and are marked 🧪.
 - Real example: watching YouTube in a cloud sandbox where `yt-dlp` is blocked. Four rounds of plain search found nothing;
   code search found 41 repos that send the YouTube link straight to Gemini (no download), e.g. `aigentive/youtube-gemini-mcp`.
 

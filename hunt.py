@@ -45,8 +45,25 @@ def evidence_groups(need, blockers, given):
 
 
 def has_evidence(text, groups):
+    """Every positive group must match (any synonym); a group written "!word" must NOT appear."""
     t = text.lower()
-    return all(any(w in t for w in grp) for grp in groups)
+    pos = [g for g in groups if not g[0].startswith("!")]
+    neg = [w[1:] for g in groups if g[0].startswith("!") for w in g]
+    return all(any(w in t for w in grp) for grp in pos) and not any(re.search(rf"(?<![a-z0-9]){re.escape(n)}", t) for n in neg)
+
+
+def parse_want(spec):
+    """'no-gemini=youtube;storyboard|transcript;!gemini' -> ('no-gemini', [['youtube'], ['storyboard', 'transcript'], ['!gemini']])"""
+    label, _, body = spec.partition("=")
+    groups = []
+    for part in body.split(";"):
+        part = part.strip()
+        if not part: continue
+        if part.startswith("!"):
+            groups.append(["!" + w.strip().lower() for w in part[1:].split("|")])
+        else:
+            groups.append([w.strip().lower() for w in part.split("|") if w.strip()])
+    return label.strip(), groups
 
 
 def gh(path, **params):
@@ -56,7 +73,8 @@ def gh(path, **params):
 
 
 def code_search(groups):
-    """Repos whose CODE contains the evidence (one term of each group)."""
+    """Repos whose CODE contains the evidence (one term of each positive group; "!" groups are checked on the README)."""
+    groups = [g for g in groups if not g[0].startswith("!")]
     q = " ".join(f'"{grp[0]}"' if " " in grp[0] else grp[0] for grp in groups[:3])
     d = gh("search/code", q=q, per_page="50")
     out = {}
@@ -105,8 +123,13 @@ def variants(need, round_no, used):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("need")
+    ap.add_argument("need", nargs="?")
+    ap.add_argument("--tested", nargs="+", metavar=("REPO", "works|fails"),
+                    help='record a real test: --tested owner/repo works "note" (it then floats up or sinks in later hunts)')
     ap.add_argument("--works-if", nargs="+", help='evidence groups, e.g. "gemini" "file_uri|filedata"')
+    ap.add_argument("--want", action="append", default=[],
+                    help='several targets at once: label=group;group;!excluded (repeat). E.g. '
+                         '--want "gemini=gemini;file_uri|filedata;youtube" --want "no-gemini=youtube;transcript|storyboard;!gemini"')
     ap.add_argument("--where", default="cloud")
     ap.add_argument("--blockers", nargs="+", default=[])
     ap.add_argument("--rounds", type=int, default=5)
@@ -115,6 +138,15 @@ def main():
     ap.add_argument("--mcpsommelier", default=str(Path(__file__).resolve().parent.parent / "mcpsommelier" / "mcpsommelier.py"))
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
+    if a.tested:
+        idx = rs.load(rs.INDEX, {"searches": [], "verdicts": {}})
+        res = "works" if (a.tested[1] if len(a.tested) > 1 else "works").lower() in ("works", "funciona", "ok", "good") else "fails"
+        idx.setdefault("tested", {})[a.tested[0]] = {"result": res, "note": " ".join(a.tested[2:]), "where": a.where,
+                                                     "date": time.strftime("%Y-%m-%d")}
+        rs.DATA.mkdir(parents=True, exist_ok=True); rs.INDEX.write_text(json.dumps(idx, ensure_ascii=False, indent=1))
+        print(f"Recorded: {a.tested[0]} {res}"); return
+    if not a.need:
+        ap.error("need is required")
     prof = rs.load(rs.HERE / "profiles" / f"{a.where}.json", {}) if a.where else {}
     blockers = list(dict.fromkeys([b.lower() for b in a.blockers] + prof.get("blockers", [])))
     notes = []
@@ -124,10 +156,12 @@ def main():
             blockers.remove(b); notes.append(f"{b}: works here now")
         elif ok is False:
             notes.append(f"{b}: still blocked here")
-    groups = evidence_groups(a.need, blockers, a.works_if)
-    print(f"Evidence that it works here: {groups} · blockers: {blockers} · {'; '.join(notes)}", file=sys.stderr)
+    targets = [parse_want(w) for w in a.want] or [("main", evidence_groups(a.need, blockers, a.works_if))]
+    groups = targets[0][1]
+    print(f"Targets: {targets} · blockers: {blockers} · {'; '.join(notes)}", file=sys.stderr)
     seen, found, near, log, used = set(), [], [], [], list(a.queries)
-    rs.NEWS_TERMS.update(w for grp in groups for w in grp if len(w) >= 3)
+    rs.NEWS_TERMS.update(w for _, gs in targets for grp in gs for w in grp if len(w) >= 3 and not w.startswith("!"))
+    need_per = {lab: a.min_found for lab, _ in targets}
     for rnd in range(a.rounds):
         qs = (a.queries if rnd == 0 and a.queries else []) or variants(a.need, rnd, used)
         used += qs
@@ -141,16 +175,17 @@ def main():
             for repo, why in npm_search(q): add(repo, why)                     # 2. npm
             for repo, why in hn_comments(q): add(repo, why)                    # 3. HN comments
             time.sleep(2.0)
-        if rnd == 0 or rnd % 2 == 1:
-            gg = groups if rnd == 0 else [grp[1:] or grp for grp in groups]      # other synonyms on later rounds
-            for repo, paths in code_search(gg).items():                    # 4. GitHub code search (what the code does)
-                add(repo, f"code: {', '.join(paths[:2])}")
+        for lab, gs in targets:                                                # 4. GitHub code search (what the code does)
+            pos = [g for g in gs if not g[0].startswith("!")]
+            gg = [[g[rnd % len(g)]] + g for g in pos]                         # another synonym each round
+            for repo, paths in code_search(gg).items():
+                add(repo, f"code[{lab}]: {', '.join(paths[:2])}")
         news = rs.news_mentions(qs[:2], 180)                                   # 5. HN stories
         social, _ = rs.social_mentions(qs[:1], 60)                             # 6. X / Reddit (if a key exists)
         for repo in list(news) + list(social): add(repo, "news")
         spaces = hf_spaces(qs[0]) if qs else []                                # 7. Hugging Face Spaces (apps, not repos)
         checked = 0
-        order = sorted(cands.items(), key=lambda kv: (not any(w.startswith("code:") for w in kv[1]), -len(kv[1])))
+        order = sorted(cands.items(), key=lambda kv: (not any(w.startswith("code") for w in kv[1]), -len(kv[1])))
         for repo, whys in order[:60]:
             seen.add(repo)
             txt = rs.readme(repo)
@@ -158,17 +193,22 @@ def main():
                 continue
             checked += 1
             hard, soft = rs.check_blockers(txt, blockers)
-            code_hit = any(w.startswith("code:") for w in whys)
-            ev = has_evidence(txt, groups) or code_hit
-            item = {"repo": repo, "url": f"https://github.com/{repo}", "found_by": whys[:3], "soft_blockers": soft, "round": rnd + 1}
-            if ev and not hard:
-                found.append(item)
-            elif ev and hard:
-                near.append({**item, "blocked_by": hard})
+            for lab, gs in targets:
+                code_hit = any(w.startswith(f"code[{lab}]") for w in whys)
+                negs = [g for g in gs if g[0].startswith("!")]
+                ev = (has_evidence(txt, gs) or (code_hit and has_evidence(txt, negs))) if negs else (has_evidence(txt, gs) or code_hit)
+                item = {"repo": repo, "url": f"https://github.com/{repo}", "found_by": whys[:3], "soft_blockers": soft,
+                        "round": rnd + 1, "target": lab}
+                if ev and not hard:
+                    found.append(item)
+                elif ev and hard:
+                    near.append({**item, "blocked_by": hard})
         log.append({"round": rnd + 1, "queries": qs, "candidates": len(cands), "readmes": checked, "found_total": len(found),
                     "spaces": [s["id"] for s in spaces[:5]]})
         print(f"round {rnd + 1}: {len(cands)} candidates, {checked} READMEs, {len(found)} work here", file=sys.stderr)
-        if len(found) >= a.min_found:
+        counts = {lab: sum(1 for f in found if f["target"] == lab) for lab, _ in targets}
+        print(f"   per target: {counts}", file=sys.stderr)
+        if all(counts[lab] >= need_per[lab] for lab in counts):
             break
     # rank what works with RepoSommelier's metadata (stars, activity, license)
     for f in found:
@@ -181,8 +221,14 @@ def main():
         return sum(1 for t in terms if t in hay) / max(1, len(terms)) + min(0.3, (f.get("stars") or 0) / 5000)
     for f in found:
         f["fit"] = round(fit(f), 2)
-    found = [f for f in found if f["fit"] >= 0.2] or found
-    found.sort(key=lambda f: -f["fit"])
+    tested = rs.load(rs.INDEX, {}).get("tested", {})
+    for f in found:
+        t = tested.get(f["repo"])
+        if t:
+            f["tested"] = t
+            f["fit"] += 1.0 if t["result"] == "works" else -1.0            # real tests beat any guess
+    found = [f for f in found if f["fit"] >= 0.15 or f.get("tested")] or found
+    found.sort(key=lambda f: (f["target"], -f["fit"]))
     connectors = None
     if not found and Path(a.mcpsommelier).exists():
         r = subprocess.run([sys.executable, a.mcpsommelier, a.need, "--where", a.where, "--json", "--top", "8"],
@@ -199,8 +245,9 @@ def main():
     print(f"Evidence: {groups} · blockers: {blockers} · {'; '.join(notes)}\n")
     for l in log:
         print(f"- round {l['round']}: {l['candidates']} candidates, {l['readmes']} READMEs, {l['found_total']} working · queries: {l['queries']}")
-    print("\n## ✅ Works here\n" + ("\n".join(f"- [{f['repo']}]({f['url']}) ({f.get('stars', 0)}⭐, {f.get('license')}) — {f.get('description', '')} · found by: {'; '.join(f['found_by'])}"
-                                       + (f" · ⚠️ without {', '.join(f['soft_blockers'])}" if f["soft_blockers"] else "") for f in found) or "- nothing yet"))
+    print("\n## ✅ Works here\n" + ("\n".join(f"- [{f['target']}] [{f['repo']}]({f['url']}) ({f.get('stars', 0)}⭐, {f.get('license')}) — {f.get('description', '')} · found by: {'; '.join(f['found_by'])}"
+                                       + (f" · ⚠️ without {', '.join(f['soft_blockers'])}" if f["soft_blockers"] else "")
+                                       + (f" · 🧪 tested here: {f['tested']['result']} ({f['tested']['date']})" if f.get("tested") else "") for f in found) or "- nothing yet"))
     if near:
         print("\n## ⛔ Would work, but blocked here\n" + "\n".join(f"- [{n['repo']}]({n['url']}) — {', '.join(n['blocked_by'])}" for n in near[:10]))
     if connectors:
