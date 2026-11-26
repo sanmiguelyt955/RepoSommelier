@@ -282,6 +282,105 @@ def trending_news(days=7):
     return found
 
 
+# ---------- social: X and Reddit (where most repos get shared) ----------
+# Both block anonymous servers. Allowed ways, each optional and with YOUR key (never scraping, never cookies):
+#   FIRECRAWL_API_KEY  web search that indexes X and Reddit posts (site:x.com / site:reddit.com)
+#   BRAVE_API_KEY      Brave Search API (free tier), same idea
+#   REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET   official Reddit API (free "script" app for personal use)
+#   X_BEARER_TOKEN     official X API (recent search needs a paid tier)
+def _post_json(url, data, headers):
+    try:
+        req = urllib.request.Request(url, json.dumps(data).encode(), {**UA, "Content-Type": "application/json", **headers})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _social_hit(source, title, url, text, date=""):
+    item = {"source": source, "title": (title or "")[:160], "url": url or "", "points": 20, "date": date, "link": url or ""}
+    NEWS_HITS.append(item)
+    repo = _repo_from(text) or _repo_from(url)
+    return repo, {k: item[k] for k in ("source", "title", "points", "date", "link")}
+
+
+def social_mentions(topics, days=30):
+    found, used = {}, []
+    tbs = "qdr:m" if days <= 31 else "qdr:y"
+    fk, bk = os.environ.get("FIRECRAWL_API_KEY"), os.environ.get("BRAVE_API_KEY")
+    for q in topics[:3]:
+        query = f"{q} github (site:x.com OR site:reddit.com)"
+        rows = []
+        if fk:
+            d = _post_json("https://api.firecrawl.dev/v2/search", {"query": query, "limit": 15, "tbs": tbs},
+                           {"Authorization": f"Bearer {fk}"}) or {}
+            rows = [(w.get("title"), w.get("url"), (w.get("title") or "") + " " + (w.get("description") or ""))
+                    for w in (d.get("data") or {}).get("web", [])]
+            used.append("Firecrawl")
+        elif bk:
+            try:
+                req = urllib.request.Request("https://api.search.brave.com/res/v1/web/search?count=20&freshness=pm&q="
+                                             + urllib.parse.quote(query), headers={**UA, "X-Subscription-Token": bk})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    d = json.loads(r.read())
+                rows = [(w.get("title"), w.get("url"), (w.get("title") or "") + " " + (w.get("description") or ""))
+                        for w in (d.get("web") or {}).get("results", [])]
+                used.append("Brave")
+            except Exception:  # noqa: BLE001
+                pass
+        for title, url, text in rows:
+            src = "X" if "x.com/" in (url or "") or "twitter.com/" in (url or "") else "Reddit" if "reddit.com/" in (url or "") else None
+            if not src or not relevant({"title": text, "url": url or ""}):
+                continue
+            repo, m = _social_hit(src, title, url, text)
+            if repo:
+                found.setdefault(repo, []).append(m)
+    rid, rsec = os.environ.get("REDDIT_CLIENT_ID"), os.environ.get("REDDIT_CLIENT_SECRET")
+    if rid and rsec:
+        try:
+            import base64
+            req = urllib.request.Request("https://www.reddit.com/api/v1/access_token", b"grant_type=client_credentials",
+                                         {**UA, "Authorization": "Basic " + base64.b64encode(f"{rid}:{rsec}".encode()).decode()})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                tok = json.loads(r.read())["access_token"]
+            for q in topics[:3]:
+                req = urllib.request.Request("https://oauth.reddit.com/search?sort=top&t=month&limit=50&q=" + urllib.parse.quote(q + " github"),
+                                             headers={**UA, "Authorization": f"Bearer {tok}"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    for c in json.loads(r.read())["data"]["children"]:
+                        p_ = c["data"]
+                        text = (p_.get("title") or "") + " " + (p_.get("url") or "") + " " + (p_.get("selftext") or "")[:2000]
+                        if not relevant({"title": text, "url": ""}): continue
+                        repo, m = _social_hit("Reddit", p_.get("title"), "https://www.reddit.com" + p_.get("permalink", ""), text,
+                                              datetime.fromtimestamp(p_.get("created_utc", 0), timezone.utc).strftime("%Y-%m-%d"))
+                        m["points"] = p_.get("score") or 0
+                        if repo: found.setdefault(repo, []).append(m)
+            used.append("Reddit API")
+        except Exception:  # noqa: BLE001
+            pass
+    xb = os.environ.get("X_BEARER_TOKEN")
+    if xb:
+        for q in topics[:2]:
+            d = _get_json_auth("https://api.x.com/2/tweets/search/recent?max_results=50&tweet.fields=public_metrics,created_at,entities&query="
+                               + urllib.parse.quote(f"{q} github.com -is:retweet"), xb)
+            for t in (d or {}).get("data", []):
+                urls = " ".join(u.get("expanded_url", "") for u in (t.get("entities") or {}).get("urls", []))
+                repo, m = _social_hit("X", t.get("text"), f"https://x.com/i/status/{t['id']}", t.get("text", "") + " " + urls,
+                                      (t.get("created_at") or "")[:10])
+                m["points"] = sum((t.get("public_metrics") or {}).get(k, 0) for k in ("like_count", "retweet_count"))
+                if repo: found.setdefault(repo, []).append(m)
+        used.append("X API")
+    return found, used
+
+
+def _get_json_auth(url, token):
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={**UA, "Authorization": f"Bearer {token}"}), timeout=30) as r:
+            return json.loads(r.read())
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def lookup_repos(names):
     """GitHub metadata for repos found in the news (through the search API: repo:owner/name)."""
     out = []
@@ -522,6 +621,13 @@ def main():
     NEWS_TERMS.update(t for t in words(" ".join(queries) + " " + " ".join(keys)) if len(t) >= 3 and t not in GENERIC)
     if a.news or a.trending:
         mentions = trending_news(min(a.days, 7) if a.trending and not a.news else a.days) if a.trending else news_mentions(queries[:4], a.days)
+        social, used = social_mentions(queries or [a.need], a.days)
+        for k, v in social.items():
+            mentions.setdefault(k, []).extend(v)
+        notes.append(("X/Reddit: " + ", ".join(used)) if used else
+                     {"es": "X/Reddit: sin acceso (bloquean servidores). Para leerlos, pon FIRECRAWL_API_KEY o BRAVE_API_KEY, o las claves oficiales de Reddit/X",
+                      "pt": "X/Reddit: sem acesso (bloqueiam servidores). Defina FIRECRAWL_API_KEY ou BRAVE_API_KEY, ou as chaves oficiais"}.get(
+                         lang, "X/Reddit: no access (they block servers). Set FIRECRAWL_API_KEY or BRAVE_API_KEY, or the official Reddit/X keys"))
         top_news = sorted(mentions, key=lambda n: -sum(m["points"] for m in mentions[n]))[:25]
         known = {n.lower() for n in cand} | {n.lower() for n in dropped}
         for r in lookup_repos([n for n in top_news if n.lower() not in known]):

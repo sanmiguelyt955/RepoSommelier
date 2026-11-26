@@ -34,6 +34,7 @@ python3 reposommelier.py "..." --blockers yt-dlp gpu cookies
 ## Noticias y repos del momento
 - `--news`: además de GitHub, lee lo que se comenta en Hacker News, Lobsters y dev.to (últimos 120 días).
 - `--trending`: los repos del momento (últimos 7 días), revisados contra tu perfil. GitHub Trending bloquea servidores; su sustituto legítimo es la búsqueda oficial de GitHub.
+- **X y Reddit** (donde más se comparten repos) bloquean servidores. Solo se leen por caminos permitidos y con tu propia clave: `FIRECRAWL_API_KEY` o `BRAVE_API_KEY` (buscadores que indexan publicaciones públicas), la API oficial de Reddit (gratis para uso personal) o la de X (de pago). Sin clave te lo dice; nunca raspa páginas ni usa cookies.
 - Marca los repos con estrellas sospechosamente rápidas (a veces son falsas o trampas con malware).
 
 ## Plan B: sustitutos legítimos de lo bloqueado
