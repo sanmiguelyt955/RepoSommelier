@@ -535,8 +535,14 @@ def score(r, terms, sig, judge, verdicts):
     return round(35 * rel + 15 * pj + 15 * pop + 15 * act + 10 * health + 10 * plic + verdicts.get(r["full_name"], {}).get("shift", 0)), lic
 
 
+BYPASS_WORDS = ("stealth", "anti-bot", "antibot", "bypass cloudflare", "bypass captcha", "captcha solv", "solve captcha",
+                "waf bypass", "bypass waf", "undetected", "rotating proxies", "residential proxies", "evade detection")
+
+
 def warnings(r, lic, s, w):
     a = []
+    if any(x in ((r.get("description") or "") + " " + " ".join(r.get("topics") or [])).lower() for x in BYPASS_WORDS):
+        a.append("🚫 made to evade site protections: not recommended")
     if not lic or lic == "noassertion": a.append(w["nolic"])
     elif lic in COPYLEFT: a.append(w["copyleft"])
     elif "nc" in lic: a.append(w["nc"])
