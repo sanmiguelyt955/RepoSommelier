@@ -510,6 +510,30 @@ def plan_b(blocked_rows, lang, limit=6):
 
 
 # ---------- scoring ----------
+
+ALT_RE = re.compile(r"(?:alternativ[ae]s?\s+(?:gratis\s+|free\s+|gratuita\s+)?(?:a|to|ao|à|de|for|para)\s+|dejar de pagar(?:\s+por)?\s+|deixar de pagar\s+|parar de pagar(?:\s+o)?\s+|stop paying(?:\s+for)?\s+|reemplazar\s+(?:a\s+)?|substituir\s+(?:o\s+)?|replace\s+)([A-Za-z0-9][\w.\- ]{1,30}?)(?=[\s,.;:!?]|$)", re.I)
+
+def alternative_target(need):
+    """'quiero dejar de pagar Loom' -> 'Loom' (None if the need is not about replacing a product)."""
+    m = ALT_RE.search(need or "")
+    return m.group(1).strip(" .") if m else None
+
+def alternative_sources(product):
+    """Open-source replacements listed for a product on openalternative.co (owner/name list)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", product.lower()).strip("-")
+    try:
+        req = urllib.request.Request(f"https://openalternative.co/alternatives/{slug}", headers={"User-Agent": "RepoSommelier"})
+        html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
+    except Exception:
+        return []
+    seen = []
+    for o, n in re.findall(r"github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", html):
+        n = re.sub(r"\.git$", "", n)
+        full = f"{o}/{n}"
+        if o.lower() in ("openalternative", "piotrkulpinski", "sponsors", "features", "topics", "orgs") or full in seen: continue
+        seen.append(full)
+    return seen[:20]
+
 def reject(r):
     if r.get("archived"): return "archived"
     if r.get("fork"): return "fork"
@@ -578,6 +602,8 @@ def main():
     ap.add_argument("--json", action="store_true", help="machine-readable output for agents")
     ap.add_argument("--verdict", nargs="+", metavar=("REPO", "good|bad"))
     ap.add_argument("--history", action="store_true")
+    ap.add_argument("--alternative", "--alternativa", dest="alternative", metavar="PRODUCT",
+                    help="find FREE open-source alternatives to a paid product (e.g. Loom, Notion). Also detected from the need: «quiero dejar de pagar Loom»")
     a = ap.parse_args()
     DATA.mkdir(parents=True, exist_ok=True)
     index = load(INDEX, {"searches": [], "verdicts": {}})
@@ -599,7 +625,12 @@ def main():
         a.profile = str(own if own.exists() else ex)
     prof_data = load(a.profile, {}) if a.profile else {}
     blockers = list(dict.fromkeys([b.lower() for b in a.blockers] + [b.lower() for b in prof_data.get("blockers", [])]))
-    queries, keys, origin, glang = ((a.queries, [], "yours", None) if a.queries else
+    alt = a.alternative or alternative_target(a.need or "")
+    if alt:
+        a.need = a.need or f"free open-source alternative to {alt}"
+        if not a.queries:
+            a.queries = [f'"alternative to {alt}"', f"{alt} alternative open source", f"{alt} alternative self-hosted", f"open source {alt}"]
+    queries, keys, origin, glang = ((a.queries, [], "alternative" if alt else "yours", None) if a.queries else
                                     ([], [], "news only", None) if only_trending else plan_queries(a.need))
     lang = (a.lang or glang or guess_lang(a.need)).lower()[:2]
     T = L.get(lang, L["en"])
@@ -621,6 +652,12 @@ def main():
             if n in cand or n in dropped: continue
             why = reject(r)
             (dropped.__setitem__(n, why) if why else cand.__setitem__(n, r))
+    alt_listed = set()
+    if alt:
+        for r in lookup_repos([n for n in alternative_sources(alt) if n not in cand and n not in dropped]):
+            alt_listed.add(r["full_name"])
+            why = reject(r)
+            (dropped.__setitem__(r["full_name"], why) if why else cand.__setitem__(r["full_name"], r))
     mentions = {}
     GENERIC = {"open", "source", "fast", "free", "english", "model", "models", "tool", "best", "new", "simple", "local",
                "python", "code", "library", "app", "web", "api", "github", "repo", "easy", "cpu", "gpu", "real", "time"}
@@ -680,6 +717,12 @@ def main():
             continue
         if r["full_name"] in mentions:
             pts += round(8 * buzz(mentions[r["full_name"]]))
+        alt_hit = bool(alt) and (r["full_name"] in alt_listed or re.search(r"alternative\s+(?:to\s+)?" + re.escape(alt.lower()),
+                                  ((r.get("description") or "") + " " + s.get("_text", "")[:20000]).lower()))
+        if alt:   # replacing a paid product: proven and popular beats brand-new
+            stars = r["stargazers_count"]
+            pts += (8 if alt_hit else -22) + (5 if r["full_name"] in alt_listed else 0) \
+                   + round(5 * math.log10(stars + 1)) - (10 if stars < 20 else 0)
         pts = max(0, min(100, pts))
         rows.append({"repo": r["full_name"], "url": r["html_url"], "score": pts,
                      "tier": T["tiers"][0] if pts >= 70 else T["tiers"][1] if pts >= 55 else T["tiers"][2],
@@ -692,6 +735,9 @@ def main():
             rows[-1]["news"] = ms[:3]
             rows[-1]["warnings"].append(f"📰 {ms[0]['source']}" + (f" {ms[0]['points']} pts" if ms[0]["source"] == "Hacker News" else "")
                                         + (f" ({ms[0]['date']})" if ms[0]["date"] else "") + (f" +{len(ms) - 1}" if len(ms) > 1 else ""))
+        if alt_hit:
+            rows[-1]["warnings"].insert(0, {"es": f"🔁 alternativa gratis a {alt}", "pt": f"🔁 alternativa grátis ao {alt}"}.get(lang, f"🔁 free alternative to {alt}")
+                                        + (" (openalternative.co)" if r["full_name"] in alt_listed else ""))
         if soft:
             rows[-1]["warnings"].append(f"{T['partial']} {', '.join(soft)}, {T['loses']}"
                                         + (" (" + {"es": "no actives su opción de cookies", "pt": "não ative a opção de cookies"}.get(lang, "do not turn on its cookies option") + ")" if "cookies" in soft else ""))

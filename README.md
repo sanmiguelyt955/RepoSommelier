@@ -106,3 +106,13 @@ Read-only. It only reads public GitHub search results and READMEs; it never clon
 
 ## License
 MIT © 2026 sanmiguelyt955
+
+## Free alternatives to a paid product
+```bash
+python3 reposommelier.py --alternative Loom          # or just: "I want to stop paying for Loom"
+python3 reposommelier.py "quiero dejar de pagar Notion"
+```
+It detects "alternative to X / stop paying X / dejar de pagar X / parar de pagar X / replace X", searches GitHub
+("alternative to X", "X alternative self-hosted"…) plus the list on openalternative.co, and ranks proven projects
+first (stars weigh more, brand-new repos with < 20 stars lose points, repos that only share the name are pushed down).
+Each real replacement is tagged 🔁.

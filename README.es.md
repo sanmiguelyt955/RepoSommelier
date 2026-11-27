@@ -46,3 +46,11 @@ Ronda tras ronda agrega búsquedas nuevas y lee más fuentes: búsqueda de repos
 Responde en el idioma en que preguntes; también puedes elegirlo con `--lang es`.
 
 **Seguridad:** solo **lee** datos públicos. Nunca clona, instala ni corre lo que encuentra. Revisa el código antes de usar cualquier repo.
+
+## Alternativas gratis a un producto de paga
+```bash
+python3 reposommelier.py --alternativa Loom          # o simplemente: "quiero dejar de pagar Loom"
+```
+Detecta «alternativa a X / dejar de pagar X / parar de pagar X / replace X», busca en GitHub y en openalternative.co,
+y pone primero los proyectos probados (las estrellas pesan más; los nuevos con menos de 20 estrellas bajan; los que solo
+comparten el nombre se van abajo). Cada reemplazo real lleva 🔁.
