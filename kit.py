@@ -39,17 +39,17 @@ T = {
            "where": "donde corre", "ai": "lo hace la IA sola, no necesitas nada", "none": "no encontré nada bueno para este paso",
            "backup": "respaldo", "paid": "💳 opcional, de paga", "nc": "⛔ licencia NO comercial: no sirve para monetizar",
            "check": "⚠️ revisa la licencia antes de monetizar", "have": "✅ ya lo tienes", "summary": "Resumen",
-           "install": "instalar", "steps": "Pasos"},
+           "install": "instalar", "steps": "Pasos", "close": "⚠️ lo más cercano (pocos puntos)"},
     "en": {"title": "Your kit for", "cond": "Conditions", "free": "free", "money": "to monetize (commercial use)",
            "where": "runs on", "ai": "the AI does it by itself, you need nothing", "none": "nothing good found for this step",
            "backup": "backup", "paid": "💳 optional, paid", "nc": "⛔ NON-commercial license: not for monetizing",
            "check": "⚠️ check the license before monetizing", "have": "✅ you have it", "summary": "Summary",
-           "install": "install", "steps": "Steps"},
+           "install": "install", "steps": "Steps", "close": "⚠️ closest match (low score)"},
     "pt": {"title": "Seu kit para", "cond": "Condições", "free": "grátis", "money": "para monetizar (uso comercial)",
            "where": "onde roda", "ai": "a IA faz sozinha, você não precisa de nada", "none": "não achei nada bom para este passo",
            "backup": "reserva", "paid": "💳 opcional, pago", "nc": "⛔ licença NÃO comercial: não serve para monetizar",
            "check": "⚠️ confira a licença antes de monetizar", "have": "✅ você já tem", "summary": "Resumo",
-           "install": "instalar", "steps": "Passos"},
+           "install": "instalar", "steps": "Passos", "close": "⚠️ o mais próximo (poucos pontos)"},
 }
 
 
@@ -141,7 +141,7 @@ def picks(kind, out, free, money):
     elif kind == "connector":
         for c in (out.get("ranking", []) + [dict(p, paid=True) for p in out.get("paid", [])]):
             items.append({"name": c.get("title") or c["name"], "url": c.get("url"), "score": c["score"], "desc": c.get("what", ""),
-                          "how": "claude.ai → Conectores" if c.get("kind") == "hosted" else c.get("setup", ""),
+                          "how": ("✅" if c.get("have") else "claude.ai → Conectores" if c.get("kind") == "hosted" else c.get("setup", "")),
                           "have": c.get("have"), "paid": bool(c.get("paid")), "lic": None})
     else:
         for s in out.get("results", []) + out.get("needs_extra", []):
@@ -193,7 +193,8 @@ def main():
         for k in s.get("kinds", []):
             if (i, k) not in jobs: continue
             ok, paid = picks(k, jobs[(i, k)].result(), free, money)
-            ok = [x for x in ok if x["score"] >= a.min or x["have"]]
+            close = [dict(x, close=True) for x in ok[:1] if x["score"] < a.min and not x["have"]]
+            ok = [x for x in ok if x["score"] >= a.min or x["have"]] or close
             paid = [x for x in paid if x["score"] >= a.min]
             entry["picks"][k] = {"best": ok[:1], "backup": ok[1:2], "paid": paid[:1]}
         kit.append(entry)
@@ -219,8 +220,10 @@ def main():
     def line(kind, it, tag=""):
         flag = {"nc": " " + L["nc"], "check": " " + L["check"]}.get(it.get("license_flag", ""), "")
         st = f" · {it['stars']:,}⭐" if isinstance(it.get("stars"), int) else ""
-        return (f"- {ICON[kind]} {tag}**[{it['name']}]({it['url']})** ({it['score']}{st}){' ' + L['have'] if it['have'] else ''}{flag} — "
-                f"{(it['desc'] or '')[:110]}  \n  `{it['how']}`")
+        name = f"[{it['name']}]({it['url']})" if it.get("url") else it["name"]
+        tag = tag + (L["close"] + ": " if it.get("close") else "")
+        return (f"- {ICON[kind]} {tag}**{name}** ({it['score']}{st}){' ' + L['have'] if it['have'] else ''}{flag} — "
+                f"{(it['desc'] or '')[:110]}" + (f"  \n  `{it['how']}`" if it.get("how") and it["how"] != "✅" else ""))
     out = [f"# {L['title']}: {a.goal}",
            f"**{L['cond']}:** " + ", ".join(x for x in [L["free"] if free else "", L["money"] if money else "",
                                                         f"{L['where']}: {a.where}" if a.where else ""] if x) or "—", ""]
