@@ -256,7 +256,7 @@ def combos(e):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("goal", help="what you want to achieve, in any language")
+    ap.add_argument("goal", nargs="?", help="what you want to achieve, in any language")
     ap.add_argument("--where", help="cloud, laptop… (profiles of each finder)")
     ap.add_argument("--free", action="store_true", help="force: only free")
     ap.add_argument("--commercial", action="store_true", help="force: you will make money with the result")
@@ -265,45 +265,90 @@ def main():
     ap.add_argument("--lang")
     ap.add_argument("--plan", help="JSON (text or file) with the steps, written by you or your AI agent: "
                     '{"free": bool, "commercial": bool, "steps": [{"step", "query", "kinds": [repo|connector|skill], "why"}]}')
+    ap.add_argument("--save", "--guardar", dest="save", metavar="FILE",
+                    help="phase 1: search + verify + filter, save the candidates and print a REVIEW SHEET (no Gemini) and stop")
+    ap.add_argument("--from", "--desde", dest="load", metavar="FILE", help="phase 2: use the candidates saved with --save")
+    ap.add_argument("--review", "--revision", dest="review", metavar="FILE|JSON",
+                    help='phase 2: the final review written by you or your AI agent instead of Gemini: '
+                         '{"steps": [{"step": 1, "repo": "name"|null, "connector": "name"|null, "skill": "name"|null, "why": "..."}], "drop": ["name"]}')
+    ap.add_argument("--no-gemini", action="store_true", help="never call Gemini (keyword fit check)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--md")
     a = ap.parse_args()
-    if a.plan:   # the plan written by the agent that runs the kit (e.g. Claude), when it knows better or Gemini is down
-        pj = json.loads(Path(a.plan).read_text() if Path(a.plan).exists() else a.plan)
-        g_lang, g_free, g_money = guess(a.goal)
-        lang, free, money, steps = pj.get("lang", g_lang), pj.get("free", g_free), pj.get("commercial", g_money), pj["steps"]
+    if not a.goal and not a.load:
+        ap.error("give a goal, or --from a saved file")
+    if a.load:
+        st = json.loads(Path(a.load).read_text())
+        a.goal, lang, free, money, steps, kit, dead_all = st["goal"], st["lang"], st["free"], st["commercial"], st["steps"], st["kit"], st["dead"]
+        a.where = a.where or st.get("where")
+        L = T.get(lang, T["es"])
     else:
-        lang, free, money, steps = plan(a.goal)
-        if steps and all(set(x.get("kinds", [])) == {"repo", "connector", "skill"} and not x.get("why") for x in steps):
-            print("⚠️ Gemini did not answer (quota?): rough automatic plan. For a better kit pass --plan with your own steps:\n"
-                  '  --plan \'{"steps": [{"step": "...", "query": "english words", "kinds": ["repo","skill"], "why": "..."}]}\'', file=sys.stderr)
-    free, money = free or a.free, money or a.commercial
-    lang = (a.lang or lang or "es")[:2]
-    L = T.get(lang, T["es"])
-    print(f"{L['steps']}: " + " → ".join(s["step"] for s in steps), file=sys.stderr)
+        if a.plan:   # the plan written by the agent that runs the kit (e.g. Claude), when it knows better or Gemini is down
+            pj = json.loads(Path(a.plan).read_text() if Path(a.plan).exists() else a.plan)
+            g_lang, g_free, g_money = guess(a.goal)
+            lang, free, money, steps = pj.get("lang", g_lang), pj.get("free", g_free), pj.get("commercial", g_money), pj["steps"]
+        else:
+            lang, free, money, steps = plan(a.goal)
+            if steps and all(set(x.get("kinds", [])) == {"repo", "connector", "skill"} and not x.get("why") for x in steps):
+                print("⚠️ Gemini did not answer (quota?): rough automatic plan. For a better kit pass --plan with your own steps:\n"
+                      '  --plan \'{"steps": [{"step": "...", "query": "english words", "kinds": ["repo","skill"], "why": "..."}]}\'', file=sys.stderr)
+        free, money = free or a.free, money or a.commercial
+        lang = (a.lang or lang or "es")[:2]
+        L = T.get(lang, T["es"])
+        print(f"{L['steps']}: " + " → ".join(s["step"] for s in steps), file=sys.stderr)
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        jobs = {(i, k): ex.submit(run_finder, k, s["query"], a.where, free, a.inventory)
-                for i, s in enumerate(steps) for k in s.get("kinds", []) if k in FINDERS}
-    kit, dead_all = [], []
-    for i, s in enumerate(steps):
-        e = {"step": s["step"], "why": s.get("why", ""), "needs": [k for k in s.get("kinds", []) if k in FINDERS], "picks": {}}
-        for k in e["needs"]:
-            good, paid, dead = choose(k, normalize(k, jobs[(i, k)].result()), free, money, a.min)
-            dead_all += dead
-            e["picks"][k] = {"best": good[:1], "backup": good[1:2], "paid": paid[:1]}
-        kit.append(e)
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            jobs = {(i, k): ex.submit(run_finder, k, s["query"], a.where, free, a.inventory)
+                    for i, s in enumerate(steps) for k in s.get("kinds", []) if k in FINDERS}
+        kit, dead_all = [], []
+        for i, s in enumerate(steps):
+            e = {"step": s["step"], "why": s.get("why", ""), "needs": [k for k in s.get("kinds", []) if k in FINDERS], "picks": {}}
+            for k in e["needs"]:
+                good, paid, dead = choose(k, normalize(k, jobs[(i, k)].result()), free, money, a.min)
+                dead_all += dead
+                e["picks"][k] = {"best": good[:1], "backup": good[1:2], "paid": paid[:1]}
+                e.setdefault("pool", {})[k] = good[:5] + paid[:2]
+            kit.append(e)
+
+    if a.save:
+        Path(a.save).write_text(json.dumps({"goal": a.goal, "lang": lang, "free": free, "commercial": money, "where": a.where,
+                                            "steps": steps, "kit": kit, "dead": dead_all}, ensure_ascii=False, indent=1))
+        print(f"# REVIEW SHEET — {a.goal}\nFor each step choose the tool that REALLY serves it (or null), from these verified options:\n")
+        for n, e in enumerate(kit, 1):
+            print(f"## {n}. {e['step']}" + ("  → 🤖 AI alone" if not e["needs"] else f"  (needs: {', '.join(e['needs'])})"))
+            for k, pool in e.get("pool", {}).items():
+                for x in pool:
+                    print(f"- {ICON[k]} {k}: «{x['name']}» ({x['score']}{', paid' if x.get('paid') else ''}"
+                          f"{', ✅ yours' if x.get('have') else ''}{', verified' if x.get('verified') else ', not verified'}) — {(x.get('desc') or '')[:150]}")
+        print("\nThen: kit.py --from " + a.save + " --review '{\"steps\": [{\"step\": 1, \"repo\": null, \"connector\": null, \"skill\": null, \"why\": \"...\"}]}'")
+        return
 
     # fit check + the best combination per step (one Gemini call; heuristic if it fails)
     listing = [{"id": f"{n}|{k}|{x['name']}", "step": e["step"], "kind": k, "tool": x["name"], "what": (x.get("desc") or "")[:140]}
                for n, e in enumerate(kit) for k, p in e["picks"].items() for x in p["best"] + p["backup"] + p["paid"]]
-    g = gemini_json("Goal: «" + a.goal + "». (1) Drop every tool that does NOT really help its step of this goal. (2) For each step "
+    rv = json.loads(Path(a.review).read_text() if Path(a.review).exists() else a.review) if a.review else None
+    g = None if (rv or a.no_gemini) else gemini_json("Goal: «" + a.goal + "». (1) Drop every tool that does NOT really help its step of this goal. (2) For each step "
                     "number, pick the best COMBINATION among the remaining best tools of that step (one kind or several that "
                     "complement each other) and explain why in ONE short sentence in language '" + lang + "'. Return JSON "
                     "{\"drop\": [ids], \"combos\": [{\"step\": number, \"kinds\": [\"repo\"|\"connector\"|\"skill\"], \"why\": \"...\"}]}\n"
                     + json.dumps(listing, ensure_ascii=False)) if listing else None
     drop = set((g or {}).get("drop", []))
-    if g is None:                       # no Gemini: drop tools that share no meaningful word with their step
+    if rv:                              # the agent's own review (no Gemini): its choice per step becomes the kit
+        bad = set(rv.get("drop", []))
+        for r in rv.get("steps", []):
+            n = int(r["step"]) - 1
+            if not 0 <= n < len(kit): continue
+            e = kit[n]
+            chosen = []
+            for k in list(e.get("pool", {})):
+                name = r.get(k)
+                pool = [x for x in e["pool"][k] if x["name"] not in bad]
+                hit = next((x for x in pool if name and x["name"].lower() == str(name).lower()), None)
+                rest = [x for x in pool if x is not hit and not x.get("paid")]
+                e["picks"][k] = {"best": [hit] if hit else [], "backup": rest[:1] if hit else [], "paid": [x for x in pool if x.get("paid") and x is not hit][:1]}
+                if hit: chosen.append(k)
+            e["combo"] = {"kinds": chosen, "why": r.get("why", ""), "reviewed": True}
+    elif g is None:                       # no Gemini: drop tools that share no meaningful word with their step
         stop = {"with", "from", "para", "with", "your", "tool", "agent", "skill", "server", "and", "the", "los", "las", "del"}
         for n, e in enumerate(kit):
             step_w = {w for w in re.findall(r"[a-záéíóúñ]{4,}", (e["step"] + " " + steps[n].get("query", "")).lower()) if w not in stop}
@@ -318,6 +363,9 @@ def main():
             if not p["best"] and p["backup"]:
                 p["best"], p["backup"] = p["backup"][:1], []
         cs = combos(e)
+        if e.get("combo", {}).get("reviewed"):
+            e["combo"]["score"] = next((c["score"] for c in cs if sorted(c["kinds"]) == sorted(e["combo"]["kinds"])), None)
+            continue
         pick = next((c for c in (g or {}).get("combos", []) if int(c.get("step", -1)) == n and
                      all(k in e["picks"] and e["picks"][k]["best"] for k in c.get("kinds", []))), None)
         e["combo"] = ({"kinds": pick["kinds"], "why": pick.get("why", ""),
