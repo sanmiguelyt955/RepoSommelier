@@ -250,7 +250,7 @@ def combos(e):
         for ks in itertools.combinations(best, n):
             sc = sum(best[k]["score"] for k in ks) / n + 8 * (n - 1) + 6 * sum(1 for k in ks if k in e["needs"]) \
                  - 10 * sum(1 for k in ks if best[k].get("close"))
-            out.append({"kinds": list(ks), "score": round(sc)})
+            out.append({"kinds": list(ks), "score": min(100, round(sc))})
     return sorted(out, key=lambda c: -c["score"])
 
 

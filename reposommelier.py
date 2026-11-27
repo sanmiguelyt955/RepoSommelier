@@ -422,7 +422,9 @@ BLOCKERS = {
                 ("optional", "if you need", "for private", "age-restricted", "members-only", "login-walled", "")),   # cookies are almost always an option: warn, do not set aside
     "docker": (("docker run", "docker compose", "docker-compose"), ("without docker", "pip install", "npm install")),
     "windows-only": (("windows only", "only works on windows"), ()),
-    "mac-only": (("macos only", "only works on macos", "apple silicon only"), ()),
+    "mac-only": (("macos only", "only works on macos", "apple silicon only", "built on mlx", "apple's mlx", "apple mlx", "mlx framework",
+                  "requires apple silicon", "apple silicon (m1", "for apple silicon", "mlx-lm", "pip install mlx"),
+                 ("linux", "windows", "cuda", "docker", "cpu")),
 }
 
 
