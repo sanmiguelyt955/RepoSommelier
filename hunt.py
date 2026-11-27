@@ -13,7 +13,7 @@ shows up. Uses every source RepoSommelier knows plus more:
 Without it, Gemini proposes the evidence from your need and blockers (fallback: the need's own keywords).
 A candidate WORKS when it has the evidence and no hard blocker for your place (--where / --blockers).
 Each round adds new queries (Gemini variants, synonyms, code patterns) and stops as soon as something works, or after
---rounds. If no repo works, it hunts connectors with MCPSommelier (if installed next to this repo or in --mcpsommelier).
+--rounds. If no repo works, it hunts connectors with MCPSommelier, then Agent Skills with SkillSommelier (when they sit next to this repo).
 Read-only: it never clones, installs or runs what it finds; X/Reddit searches spend your Firecrawl/Brave credits.
 """
 import argparse
@@ -136,6 +136,7 @@ def main():
     ap.add_argument("--min-found", type=int, default=1)
     ap.add_argument("--queries", nargs="+", default=[])
     ap.add_argument("--mcpsommelier", default=str(Path(__file__).resolve().parent.parent / "mcpsommelier" / "mcpsommelier.py"))
+    ap.add_argument("--skillsommelier", default=str(Path(__file__).resolve().parent.parent / "skillsommelier" / "skillsommelier.py"))
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     if a.tested:
@@ -237,8 +238,16 @@ def main():
             connectors = json.loads(r.stdout)
         except Exception:  # noqa: BLE001
             connectors = None
+    skills = None
+    if not found and not (connectors or {}).get("ranking") and Path(a.skillsommelier).exists():   # repo → connector → skill
+        r = subprocess.run([sys.executable, a.skillsommelier, a.need, "--where", a.where, "--json", "--no-family", "--top", "6"],
+                           capture_output=True, text=True, timeout=1200)
+        try:
+            skills = json.loads(r.stdout)
+        except Exception:  # noqa: BLE001
+            skills = None
     res = {"need": a.need, "evidence": groups, "blockers": blockers, "notes": notes, "rounds": log,
-           "works_here": found, "would_work_but_blocked": near[:10], "connectors": connectors}
+           "works_here": found, "would_work_but_blocked": near[:10], "connectors": connectors, "skills": skills}
     if a.json:
         print(json.dumps(res, ensure_ascii=False, indent=1)); return
     print(f"# Hunt: {a.need}\n")
@@ -252,6 +261,8 @@ def main():
         print("\n## ⛔ Would work, but blocked here\n" + "\n".join(f"- [{n['repo']}]({n['url']}) — {', '.join(n['blocked_by'])}" for n in near[:10]))
     if connectors:
         print("\n## 🔌 Connectors (no repo worked)\n" + "\n".join(f"- {c['title']} ({c['score']})" for c in connectors.get("ranking", [])[:6]))
+    if skills and skills.get("results"):
+        print("\n## 🎓 Skills (no repo or connector worked)\n" + "\n".join(f"- {x['repo']}/{x['skill']} ({x['pts']}) — {x['install']}" for x in skills["results"][:6]))
 
 
 if __name__ == "__main__":

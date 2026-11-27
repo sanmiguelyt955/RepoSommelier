@@ -513,6 +513,22 @@ def plan_b(blocked_rows, lang, limit=6):
 
 ALT_RE = re.compile(r"(?:alternativ[ae]s?\s+(?:gratis\s+|free\s+|gratuita\s+)?(?:a|to|ao|à|de|for|para)\s+|dejar de pagar(?:\s+por)?\s+|deixar de pagar\s+|parar de pagar(?:\s+o)?\s+|stop paying(?:\s+for)?\s+|reemplazar\s+(?:a\s+)?|substituir\s+(?:o\s+)?|replace\s+)([A-Za-z0-9][\w.\- ]{1,30}?)(?=[\s,.;:!?]|$)", re.I)
 
+def alternative_targets(need):
+    """'quiero dejar de pagar Loom, Notion y Calendly para mi equipo' -> ['Loom', 'Notion', 'Calendly']."""
+    m = ALT_RE.search(need or "")
+    if not m:
+        return []
+    rest = need[m.start(1):]
+    rest = re.split(r"\s+(?:para|for|porque|because|que|that|pois|in|en|em)\s+", rest, maxsplit=1)[0]
+    parts = re.split(r"\s*(?:,|;|/|\+|\by\b|\band\b|\be\b|\bo\b|\bor\b|\bni\b)\s*", rest)
+    out = []
+    for p in parts:
+        p = " ".join(p.strip(" .!?").split()[:3])
+        if p and p.lower() not in ("a", "el", "la", "the", "o") and p not in out:
+            out.append(p)
+    return out[:6]
+
+
 def alternative_target(need):
     """'quiero dejar de pagar Loom' -> 'Loom' (None if the need is not about replacing a product)."""
     m = ALT_RE.search(need or "")
@@ -617,6 +633,8 @@ def main():
     only_trending = a.trending and not a.need
     if only_trending:
         a.need = "the best and most talked-about new open-source repos of the moment"
+    if a.alternative and not a.need:
+        a.need = f"free open-source alternative to {a.alternative}"
     if a.history or not a.need:
         print(json.dumps(index, ensure_ascii=False, indent=1)); return
 
@@ -625,7 +643,16 @@ def main():
         a.profile = str(own if own.exists() else ex)
     prof_data = load(a.profile, {}) if a.profile else {}
     blockers = list(dict.fromkeys([b.lower() for b in a.blockers] + [b.lower() for b in prof_data.get("blockers", [])]))
-    alt = a.alternative or alternative_target(a.need or "")
+    targets = [t.strip() for t in re.split(r"\s*,\s*", a.alternative)] if a.alternative else alternative_targets(a.need or "")
+    if len(targets) > 1:          # several paid apps: one search each, same options
+        rest = [x for x in sys.argv[1:] if x != a.need and x != a.alternative and x not in ("--alternative", "--alternativa")]
+        if "--lang" not in rest:
+            rest += ["--lang", (a.lang or guess_lang(a.need or ""))]
+        for t in targets:
+            print(f"\n{'=' * 70}\n🔁 {t}\n{'=' * 70}", flush=True)
+            subprocess.run([sys.executable, __file__, "--alternative", t] + rest)
+        return
+    alt = targets[0] if targets else None
     if alt:
         a.need = a.need or f"free open-source alternative to {alt}"
         if not a.queries:

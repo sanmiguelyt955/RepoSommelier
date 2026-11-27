@@ -110,6 +110,7 @@ MIT © 2026 sanmiguelyt955
 ## Free alternatives to a paid product
 ```bash
 python3 reposommelier.py --alternative Loom          # or just: "I want to stop paying for Loom"
+python3 reposommelier.py "stop paying for Notion, Canva and Calendly"   # several apps: one search each
 python3 reposommelier.py "quiero dejar de pagar Notion"
 ```
 It detects "alternative to X / stop paying X / dejar de pagar X / parar de pagar X / replace X", searches GitHub
