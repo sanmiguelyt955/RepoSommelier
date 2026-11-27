@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
-"""kit.py — a complete KIT for a goal: the repos, connectors and skills it needs (and only those).
+"""kit.py — a complete KIT for ANY goal: the repos, connectors and skills it needs (and only those), checked to work.
 
 Same file in RepoSommelier, MCPSommelier and SkillSommelier: run it from any of them, it uses the three finders that
 sit next to each other (../reposommelier, ../mcpsommelier, ../skillsommelier).
 
-    python3 kit.py "quiero hacer videos de manera gratuita con IA para después monetizarlos"
-    python3 kit.py "send an invoice email every Monday from my Shopify orders" --where cloud
-    python3 kit.py "..." --json
+    python3 kit.py "quiero hacer videos animados gratis con IA y publicarlos en YouTube para monetizarlos"
+    python3 kit.py "responder automáticamente los correos de mis clientes con IA" --where cloud
+    python3 kit.py "track my competitors' prices every day and alert me on Telegram" --json
 
 How it works
- 1. PLAN: Gemini reads the goal (any language) and splits it into steps. For each step it says what is really needed:
-      📦 repo (software that must run) · 🔌 connector (an outside service or account: YouTube, Drive, Gmail…) ·
+ 1. PLAN: Gemini reads the goal (any language, any topic) and splits it into steps. For each step it says what is needed:
+      📦 repo (software that must run) · 🔌 connector (an outside service or account) ·
       🎓 skill (know-how that makes the agent do it better) · 🤖 nothing (the AI does it by itself).
     It also reads your conditions: free? will you make money with it (commercial use)? where does it run?
- 2. SEARCH: for each step it asks only the finders that step needs, in parallel.
- 3. FILTER by your conditions:
-      free → paid connectors, repos that need a paid API and skills that ask for a paid key go to «optional, paid».
-      monetize → licenses that forbid commercial use (CC-BY-NC, "non-commercial", "research only") are flagged ⛔,
-                 and repos without a clear license get ⚠️ «check the license».
- 4. KIT: step by step, the best pick of each kind (+ one backup), what you already have first, and how to install it.
+ 2. SEARCH THE WHOLE WEB, not only what you have: each finder searches its registries (GitHub, the official MCP
+    Registry, skills.sh, SkillsMP…). Connectors compete on equal terms (--fair): yours only keep the ✅ mark.
+ 3. CHECK THAT IT WORKS before recommending it:
+      🔌 hosted connector → its server answers an MCP handshake · npm/PyPI connector → the package exists ·
+      📦 repo / 🎓 skill → the repo exists, is not archived and was updated in the last 2 years.
+    Dead ones are dropped; unverifiable ones are marked ⚠️ and go after the verified ones.
+ 4. FILTER by your conditions: free → paid things only as an optional line · monetize → non-commercial licenses ⛔.
+ 5. FIT CHECK: one Gemini call drops picks that do not really serve their step.
+ 6. OUTPUT: 🥇 the best COMBINATION per step first (e.g. repo + skill, or connector alone, or 🤖 nothing),
+    then one table for 📦 repos, one for 🎓 skills and one for 🔌 connectors.
 Read-only: it never installs or runs what it finds.
 """
-import argparse, json, os, re, subprocess, sys, urllib.request
+import argparse, itertools, json, os, re, subprocess, sys, time, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -36,23 +40,30 @@ PERMISSIVE = {"mit", "apache-2.0", "bsd-2-clause", "bsd-3-clause", "isc", "mpl-2
               "lgpl-2.1", "lgpl-3.0", "gpl-2.0", "gpl-3.0", "agpl-3.0", "cc0-1.0"}   # all allow commercial USE
 T = {
     "es": {"title": "Tu kit para", "cond": "Condiciones", "free": "gratis", "money": "para monetizar (uso comercial)",
-           "where": "donde corre", "ai": "lo hace la IA sola, no necesitas nada", "none": "no encontré nada bueno para este paso",
-           "backup": "respaldo", "paid": "💳 opcional, de paga", "nc": "⛔ licencia NO comercial: no sirve para monetizar",
-           "check": "⚠️ revisa la licencia antes de monetizar", "have": "✅ ya lo tienes", "summary": "Resumen",
-           "install": "instalar", "steps": "Pasos", "close": "⚠️ lo más cercano (pocos puntos)"},
+           "where": "donde corre", "ai": "🤖 lo hace la IA sola", "none": "—", "backup": "Respaldo", "best": "Mejor",
+           "paid": "💳 de paga (opcional)", "nc": "⛔ licencia NO comercial", "check": "⚠️ revisa la licencia",
+           "have": "✅ ya lo tienes", "steps": "Pasos", "close": "⚠️ lo más cercano", "combo": "🥇 Combinación recomendada (primer lugar)",
+           "repos": "📦 Repos", "skills": "🎓 Skills", "conns": "🔌 Conectores", "step": "Paso", "why": "Por qué",
+           "ok": "✔ verificado", "unver": "⚠️ sin verificar", "dead": "descartados porque no funcionan", "pts": "Puntos",
+           "mine": "Tuyo", "newbest": "Mejor (de toda la red)", "install": "Cómo empezar"},
     "en": {"title": "Your kit for", "cond": "Conditions", "free": "free", "money": "to monetize (commercial use)",
-           "where": "runs on", "ai": "the AI does it by itself, you need nothing", "none": "nothing good found for this step",
-           "backup": "backup", "paid": "💳 optional, paid", "nc": "⛔ NON-commercial license: not for monetizing",
-           "check": "⚠️ check the license before monetizing", "have": "✅ you have it", "summary": "Summary",
-           "install": "install", "steps": "Steps", "close": "⚠️ closest match (low score)"},
+           "where": "runs on", "ai": "🤖 the AI does it alone", "none": "—", "backup": "Backup", "best": "Best",
+           "paid": "💳 paid (optional)", "nc": "⛔ NON-commercial license", "check": "⚠️ check the license",
+           "have": "✅ you have it", "steps": "Steps", "close": "⚠️ closest match", "combo": "🥇 Recommended combination (first place)",
+           "repos": "📦 Repos", "skills": "🎓 Skills", "conns": "🔌 Connectors", "step": "Step", "why": "Why",
+           "ok": "✔ verified", "unver": "⚠️ not verified", "dead": "dropped because they do not work", "pts": "Points",
+           "mine": "Yours", "newbest": "Best (whole web)", "install": "How to start"},
     "pt": {"title": "Seu kit para", "cond": "Condições", "free": "grátis", "money": "para monetizar (uso comercial)",
-           "where": "onde roda", "ai": "a IA faz sozinha, você não precisa de nada", "none": "não achei nada bom para este passo",
-           "backup": "reserva", "paid": "💳 opcional, pago", "nc": "⛔ licença NÃO comercial: não serve para monetizar",
-           "check": "⚠️ confira a licença antes de monetizar", "have": "✅ você já tem", "summary": "Resumo",
-           "install": "instalar", "steps": "Passos", "close": "⚠️ o mais próximo (poucos pontos)"},
+           "where": "onde roda", "ai": "🤖 a IA faz sozinha", "none": "—", "backup": "Reserva", "best": "Melhor",
+           "paid": "💳 pago (opcional)", "nc": "⛔ licença NÃO comercial", "check": "⚠️ confira a licença",
+           "have": "✅ você já tem", "steps": "Passos", "close": "⚠️ o mais próximo", "combo": "🥇 Combinação recomendada (primeiro lugar)",
+           "repos": "📦 Repos", "skills": "🎓 Skills", "conns": "🔌 Conectores", "step": "Passo", "why": "Por quê",
+           "ok": "✔ verificado", "unver": "⚠️ não verificado", "dead": "descartados porque não funcionam", "pts": "Pontos",
+           "mine": "Seu", "newbest": "Melhor (toda a rede)", "install": "Como começar"},
 }
 
 
+# ---------- Gemini ----------
 def _gemini_key():
     if os.environ.get("GEMINI_API_KEY"): return os.environ["GEMINI_API_KEY"]
     env = Path.home() / ".config/watch/.env"
@@ -74,9 +85,10 @@ def gemini_json(prompt):
     return None
 
 
+# ---------- 1. plan ----------
 def guess(goal):
-    g = (goal or "").lower()
-    lang = "pt" if re.search(r"[ãõç]| você | não ", " " + g + " ") else "es" if re.search(r"[ñ¿¡]| quiero | para | hacer ", " " + g + " ") else "en"
+    g = " " + (goal or "").lower() + " "
+    lang = "pt" if re.search(r"[ãõç]| você | não ", g) else "es" if re.search(r"[ñ¿¡]| quiero | para | hacer | mis? ", g) else "en"
     free = bool(re.search(r"\bgratis\b|\bgratuit|\bfree\b|\bgrátis\b|sin pagar|without paying|sem pagar", g))
     money = bool(re.search(r"monetiz|vender|sell|ganar dinero|make money|ganhar dinheiro|clientes|clients|comercial|commercial|negocio|business", g))
     return lang, free, money
@@ -85,21 +97,21 @@ def guess(goal):
 def plan(goal):
     lang, free, money = guess(goal)
     p = gemini_json(
-        "Plan the tools for this goal (any language). Split it into 2-7 concrete steps in order. For EACH step choose ONLY what "
-        "is really needed. Use an EMPTY list when an AI assistant can do the step by itself with no extra tool (writing a "
-        "script, ideas, titles, descriptions). Add \"skill\" only when special know-how clearly improves the step: \"repo\" = open-source software "
-        "that must run (rendering, voice, editing...), \"connector\" = an outside service/account the agent must reach "
-        "(publish to YouTube, read Gmail, Drive, Shopify...), \"skill\" = know-how that makes an AI agent do the step better. "
-        "Give each step a 2-5 word ENGLISH search query. Also read the conditions. Return JSON {\"lang\": ISO 639-1 of the goal, "
-        "\"free\": true if they want it free, \"commercial\": true if they will make money with the result, \"steps\": [{\"step\": "
-        "short name in the goal's language, \"query\": \"english words\", \"kinds\": [\"repo\"|\"connector\"|\"skill\"], \"why\": "
-        "one short sentence in the goal's language}]}. Goal: " + goal)
+        "Plan the tools for this goal (any language, any topic). Split it into 2-7 concrete steps in order. For EACH step "
+        "choose ONLY what is really needed. Use an EMPTY list when an AI assistant can do the step by itself with no extra "
+        "tool (writing, ideas, summaries, titles). \"repo\" = open-source software that must run; \"connector\" = an outside "
+        "service or account the agent must reach (send email, publish, read a calendar, a store, a chat app…); \"skill\" = "
+        "know-how that clearly makes an AI agent do the step better. Give each step a 2-5 word ENGLISH search query. Read "
+        "the conditions too. Return JSON {\"lang\": ISO 639-1 of the goal, \"free\": bool, \"commercial\": bool (they will "
+        "make money with the result), \"steps\": [{\"step\": short name in the goal's language, \"query\": \"english words\", "
+        "\"kinds\": [\"repo\"|\"connector\"|\"skill\"], \"why\": one short sentence in the goal's language}]}. Goal: " + goal)
     if p and p.get("steps"):
-        return p.get("lang") or lang, bool(p.get("free", free)) or free, bool(p.get("commercial", money)) or money, p["steps"][:7]
+        return p.get("lang") or lang, bool(p.get("free")) or free, bool(p.get("commercial")) or money, p["steps"][:7]
     return lang, free, money, [{"step": goal, "query": goal, "kinds": ["repo", "connector", "skill"], "why": ""}]
 
 
-def run_finder(kind, query, where, free, top=3, inventory=None):
+# ---------- 2. search ----------
+def run_finder(kind, query, where, free, inventory=None, top=5):
     f = FINDERS[kind]
     if not f.exists():
         return {"missing": str(f)}
@@ -107,16 +119,85 @@ def run_finder(kind, query, where, free, top=3, inventory=None):
     if where: cmd += ["--where", where]
     if kind == "repo" and free: cmd += ["--free"]
     if kind == "skill": cmd += ["--no-family"]
-    if kind == "connector" and inventory and Path(inventory).exists(): cmd += ["--inventory", inventory]
+    if kind == "connector":
+        cmd += ["--fair"]                                     # the whole web competes; yours only keep the ✅ mark
+        if inventory and Path(inventory).exists(): cmd += ["--inventory", inventory]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-        return json.loads(r.stdout)
+        return json.loads(subprocess.run(cmd, capture_output=True, text=True, timeout=900).stdout)
     except Exception as e:
         return {"error": str(e)[:200]}
 
 
+def normalize(kind, out):
+    items = []
+    if kind == "repo":
+        for r in out.get("ranking", []):
+            items.append({"name": r["repo"], "url": r["url"], "score": r["score"], "desc": r.get("description", ""),
+                          "how": f"git clone {r['url']}", "have": False, "paid": bool((r.get("signals") or {}).get("paid")),
+                          "lic": r.get("license"), "stars": r.get("stars"), "repo": r["repo"]})
+    elif kind == "connector":
+        for c in out.get("ranking", []) + [dict(p, paid=True) for p in out.get("paid", [])]:
+            gh = re.search(r"github\.com/([\w.-]+/[\w.-]+)", c.get("repo_url") or c.get("url") or "")
+            items.append({"name": c.get("title") or c["name"], "id": c["name"], "url": c.get("url"), "score": c["score"],
+                          "desc": c.get("what", ""), "have": bool(c.get("have")), "paid": bool(c.get("paid")), "kind": c.get("kind"),
+                          "endpoint": c.get("endpoint", ""), "packages": c.get("packages", []),
+                          "repo": gh.group(1).removesuffix(".git") if gh else None,
+                          "how": "✅" if c.get("have") else (f"claude.ai → Conectores → {c['endpoint']}" if c.get("endpoint")
+                                                              else c.get("setup", ""))})
+    else:
+        for s in out.get("results", []) + out.get("needs_extra", []):
+            items.append({"name": f"{s['repo']}/{s['skill']}", "url": f"https://github.com/{s['repo']}", "score": s["pts"],
+                          "desc": s.get("description", ""), "how": s["install"], "have": s.get("have"),
+                          "paid": "paid_key" in s.get("needs", []), "repo": s["repo"]})
+    return items
+
+
+# ---------- 3. check that it works ----------
+def _http(url, data=None, headers=None, timeout=15):
+    try:
+        req = urllib.request.Request(url, data=data, headers={"User-Agent": "kit.py", **(headers or {})}, method="POST" if data else "GET")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        return None
+
+
+def repo_alive(full):
+    r = subprocess.run(["gh", "api", "-X", "GET", "search/repositories", "-f", f"q=repo:{full}",
+                        "--jq", ".items[0] | [.archived, .pushed_at] | @json"], capture_output=True, text=True, timeout=30)
+    try:
+        archived, pushed = json.loads(r.stdout)
+    except Exception:
+        return None
+    if archived: return False
+    return pushed[:4] >= str(time.gmtime().tm_year - 2)
+
+
+def verify(kind, it):
+    """True = works, False = broken, None = could not check."""
+    if it.get("have"):
+        return True
+    if kind == "connector":
+        if it.get("endpoint"):
+            st = _http(it["endpoint"], json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "kit-check", "version": "1"}}}).encode(),
+                {"content-type": "application/json", "accept": "application/json, text/event-stream"})
+            if st in (200, 202, 400, 401, 403, 405, 406, 415): return True      # the server is there (maybe asks for login)
+            if st in (404, 410) or (st and st >= 500) or st is None: return False
+        for p in it.get("packages", []):
+            if p.get("type") == "npm":
+                return _http(f"https://registry.npmjs.org/{p['id']}") == 200
+            if p.get("type") == "pypi":
+                return _http(f"https://pypi.org/pypi/{p['id']}/json") == 200
+        if it.get("repo"):
+            return repo_alive(it["repo"])
+        return None
+    return repo_alive(it["repo"]) if it.get("repo") else None
+
+
 def license_flag(repo, spdx):
-    """'nc' if the README/LICENSE forbids commercial use, 'check' if unclear, '' if fine."""
     txt = ""
     for name in ("LICENSE", "LICENSE.md", "README.md"):
         for br in ("main", "master"):
@@ -125,42 +206,48 @@ def license_flag(repo, spdx):
                 break
             except Exception:
                 continue
-    if NC.search(txt):
-        return "nc"
+    if NC.search(txt): return "nc"
     return "" if (spdx or "").lower() in PERMISSIVE else "check"
 
 
-def picks(kind, out, free, money):
-    """Normalize each finder's JSON into [{name, url, score, how, have, paid, lic}]."""
-    items = []
-    if kind == "repo":
-        for r in out.get("ranking", []):
-            items.append({"name": r["repo"], "url": r["url"], "score": r["score"], "desc": r.get("description", ""),
-                          "how": f"git clone {r['url']}", "have": False, "paid": bool((r.get("signals") or {}).get("paid")),
-                          "lic": r.get("license"), "stars": r.get("stars")})
-    elif kind == "connector":
-        for c in (out.get("ranking", []) + [dict(p, paid=True) for p in out.get("paid", [])]):
-            items.append({"name": c.get("title") or c["name"], "url": c.get("url"), "score": c["score"], "desc": c.get("what", ""),
-                          "how": ("✅" if c.get("have") else "claude.ai → Conectores" if c.get("kind") == "hosted" else c.get("setup", "")),
-                          "have": c.get("have"), "paid": bool(c.get("paid")), "lic": None})
-    else:
-        for s in out.get("results", []) + out.get("needs_extra", []):
-            items.append({"name": f"{s['repo']}/{s['skill']}", "url": f"https://github.com/{s['repo']}", "score": s["pts"],
-                          "desc": s.get("description", ""), "how": s["install"], "have": s.get("have"),
-                          "paid": "paid_key" in s.get("needs", []), "lic": None, "repo": s["repo"]})
-    items.sort(key=lambda x: (not x["have"], -x["score"]))
-    ok, paid = [], []
-    for it in items:
-        (paid if (free and it["paid"]) else ok).append(it)
+def choose(kind, items, free, money, minimum):
+    """Verified, condition-aware, best-first. Returns ok list, paid list, dead names."""
+    items = sorted(items, key=lambda x: -x["score"])[:6]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        states = list(ex.map(lambda it: verify(kind, it), items))
+    dead = []
+    for it, st in zip(items, states):
+        it["verified"] = st
+        if st is False: dead.append(it["name"])
+    items = [it for it in items if it["verified"] is not False]
+    items.sort(key=lambda x: (x["verified"] is None, -x["score"]))      # verified first, then by score (yours do not jump the line)
+    ok = [x for x in items if not (free and x["paid"])]
+    paid = [x for x in items if free and x["paid"]]
     if money:
-        for it in (ok[:2] + paid[:1]):
-            repo = it["name"] if kind == "repo" else it.get("repo")
-            if repo:
-                it["license_flag"] = license_flag(repo, it["lic"] if kind == "repo" else None)
-                if it["license_flag"] == "check" and kind == "skill":
-                    it["license_flag"] = ""          # a skill is instructions; its repo license rarely matters for your videos
+        for it in ok[:2] + paid[:1]:
+            if it.get("repo") and kind != "connector":
+                it["license_flag"] = license_flag(it["repo"], it.get("lic"))
+                if kind == "skill" and it["license_flag"] == "check": it["license_flag"] = ""
         ok = [x for x in ok if x.get("license_flag") != "nc"] + [x for x in ok if x.get("license_flag") == "nc"]
-    return ok, paid
+    good = [x for x in ok if x["score"] >= minimum or x["have"]]
+    if not good and ok:
+        good = [dict(ok[0], close=True)]
+    return good, [x for x in paid if x["score"] >= minimum], dead
+
+
+# ---------- 5-6. combination ----------
+def combos(e):
+    """Every useful combination of the step's best picks, scored: mean quality + bonus for covering what the step needs."""
+    best = {k: p["best"][0] for k, p in e["picks"].items() if p["best"]}
+    if not e["needs"]:
+        return [{"kinds": [], "score": 100}]
+    out = []
+    for n in range(1, len(best) + 1):
+        for ks in itertools.combinations(best, n):
+            sc = sum(best[k]["score"] for k in ks) / n + 8 * (n - 1) + 6 * sum(1 for k in ks if k in e["needs"]) \
+                 - 10 * sum(1 for k in ks if best[k].get("close"))
+            out.append({"kinds": list(ks), "score": round(sc)})
+    return sorted(out, key=lambda c: -c["score"])
 
 
 def main():
@@ -169,9 +256,9 @@ def main():
     ap.add_argument("--where", help="cloud, laptop… (profiles of each finder)")
     ap.add_argument("--free", action="store_true", help="force: only free")
     ap.add_argument("--commercial", action="store_true", help="force: you will make money with the result")
-    ap.add_argument("--lang")
-    ap.add_argument("--inventory", default=os.environ.get("SOMMELIER_INVENTORY"), help="your connectors (MCPSommelier inventory JSON) so the ones you have come first")
+    ap.add_argument("--inventory", default=os.environ.get("SOMMELIER_INVENTORY"), help="your connectors (only to mark ✅ yours)")
     ap.add_argument("--min", type=int, default=50, help="minimum points to recommend something (default 50)")
+    ap.add_argument("--lang")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--md")
     a = ap.parse_args()
@@ -181,68 +268,76 @@ def main():
     L = T.get(lang, T["es"])
     print(f"{L['steps']}: " + " → ".join(s["step"] for s in steps), file=sys.stderr)
 
-    jobs = {}
     with ThreadPoolExecutor(max_workers=4) as ex:
-        for i, s in enumerate(steps):
-            for k in s.get("kinds", []):
-                if k in FINDERS:
-                    jobs[(i, k)] = ex.submit(run_finder, k, s["query"], a.where, free, 3, a.inventory)
-    kit = []
+        jobs = {(i, k): ex.submit(run_finder, k, s["query"], a.where, free, a.inventory)
+                for i, s in enumerate(steps) for k in s.get("kinds", []) if k in FINDERS}
+    kit, dead_all = [], []
     for i, s in enumerate(steps):
-        entry = {"step": s["step"], "why": s.get("why", ""), "query": s["query"], "needs": s.get("kinds", []), "picks": {}}
-        for k in s.get("kinds", []):
-            if (i, k) not in jobs: continue
-            ok, paid = picks(k, jobs[(i, k)].result(), free, money)
-            close = [dict(x, close=True) for x in ok[:1] if x["score"] < a.min and not x["have"]]
-            ok = [x for x in ok if x["score"] >= a.min or x["have"]] or close
-            paid = [x for x in paid if x["score"] >= a.min]
-            entry["picks"][k] = {"best": ok[:1], "backup": ok[1:2], "paid": paid[:1]}
-        kit.append(entry)
-    # one final check: drop picks that do not really serve their step (one Gemini call for the whole kit)
+        e = {"step": s["step"], "why": s.get("why", ""), "needs": [k for k in s.get("kinds", []) if k in FINDERS], "picks": {}}
+        for k in e["needs"]:
+            good, paid, dead = choose(k, normalize(k, jobs[(i, k)].result()), free, money, a.min)
+            dead_all += dead
+            e["picks"][k] = {"best": good[:1], "backup": good[1:2], "paid": paid[:1]}
+        kit.append(e)
+
+    # fit check + the best combination per step (one Gemini call; heuristic if it fails)
     listing = [{"id": f"{n}|{k}|{x['name']}", "step": e["step"], "kind": k, "tool": x["name"], "what": (x.get("desc") or "")[:140]}
                for n, e in enumerate(kit) for k, p in e["picks"].items() for x in p["best"] + p["backup"] + p["paid"]]
-    if listing:
-        g = gemini_json("Goal: «" + a.goal + "». For each tool proposed for a step, say if it REALLY helps that step of that goal "
-                        "(a YouTube transcript tool does not upload videos; a Slack GIF skill does not make YouTube animations). "
-                        "Return JSON {\"drop\": [ids that do not fit]}.\n" + json.dumps(listing, ensure_ascii=False))
-        drop = set((g or {}).get("drop", []))
-        for n, e in enumerate(kit):
-            for k, p in e["picks"].items():
-                for part in ("best", "backup", "paid"):
-                    p[part] = [x for x in p[part] if f"{n}|{k}|{x['name']}" not in drop]
-                if not p["best"] and p["backup"]:
-                    p["best"], p["backup"] = p["backup"][:1], []
+    g = gemini_json("Goal: «" + a.goal + "». (1) Drop every tool that does NOT really help its step of this goal. (2) For each step "
+                    "number, pick the best COMBINATION among the remaining best tools of that step (one kind or several that "
+                    "complement each other) and explain why in ONE short sentence in language '" + lang + "'. Return JSON "
+                    "{\"drop\": [ids], \"combos\": [{\"step\": number, \"kinds\": [\"repo\"|\"connector\"|\"skill\"], \"why\": \"...\"}]}\n"
+                    + json.dumps(listing, ensure_ascii=False)) if listing else None
+    drop = set((g or {}).get("drop", []))
+    for n, e in enumerate(kit):
+        for k, p in e["picks"].items():
+            for part in ("best", "backup", "paid"):
+                p[part] = [x for x in p[part] if f"{n}|{k}|{x['name']}" not in drop]
+            if not p["best"] and p["backup"]:
+                p["best"], p["backup"] = p["backup"][:1], []
+        cs = combos(e)
+        pick = next((c for c in (g or {}).get("combos", []) if int(c.get("step", -1)) == n and
+                     all(k in e["picks"] and e["picks"][k]["best"] for k in c.get("kinds", []))), None)
+        e["combo"] = ({"kinds": pick["kinds"], "why": pick.get("why", ""),
+                       "score": next((c["score"] for c in cs if sorted(c["kinds"]) == sorted(pick["kinds"])), None)}
+                      if pick and pick.get("kinds") else (dict(cs[0], why="") if cs else {"kinds": [], "score": None, "why": ""}))
 
     if a.json:
-        print(json.dumps({"goal": a.goal, "lang": lang, "free": free, "commercial": money, "where": a.where, "kit": kit},
-                         ensure_ascii=False, indent=1)); return
+        print(json.dumps({"goal": a.goal, "lang": lang, "free": free, "commercial": money, "where": a.where, "kit": kit,
+                          "dropped_not_working": dead_all}, ensure_ascii=False, indent=1)); return
 
-    def line(kind, it, tag=""):
+    def cell(it, kind):
+        if not it: return L["none"]
         flag = {"nc": " " + L["nc"], "check": " " + L["check"]}.get(it.get("license_flag", ""), "")
-        st = f" · {it['stars']:,}⭐" if isinstance(it.get("stars"), int) else ""
+        ver = L["ok"] if it.get("verified") else L["unver"]
+        st = f" {it['stars']:,}⭐" if isinstance(it.get("stars"), int) else ""
         name = f"[{it['name']}]({it['url']})" if it.get("url") else it["name"]
-        tag = tag + (L["close"] + ": " if it.get("close") else "")
-        return (f"- {ICON[kind]} {tag}**{name}** ({it['score']}{st}){' ' + L['have'] if it['have'] else ''}{flag} — "
-                f"{(it['desc'] or '')[:110]}" + (f"  \n  `{it['how']}`" if it.get("how") and it["how"] != "✅" else ""))
+        return (f"{L['close'] + ': ' if it.get('close') else ''}**{name}** ({it['score']}{st}) {ver}"
+                f"{' ' + L['have'] if it['have'] else ''}{flag}")
+
     out = [f"# {L['title']}: {a.goal}",
-           f"**{L['cond']}:** " + ", ".join(x for x in [L["free"] if free else "", L["money"] if money else "",
-                                                        f"{L['where']}: {a.where}" if a.where else ""] if x) or "—", ""]
-    counts = {"repo": 0, "connector": 0, "skill": 0}
+           f"**{L['cond']}:** " + (", ".join(x for x in [L["free"] if free else "", L["money"] if money else "",
+                                                          f"{L['where']}: {a.where}" if a.where else ""] if x) or "—"), "",
+           f"## {L['combo']}", f"| # | {L['step']} | Kit | {L['pts']} | {L['why']} |", "|---|---|---|---|---|"]
     for n, e in enumerate(kit, 1):
-        out.append(f"## {n}. {e['step']}" + (f" — {e['why']}" if e["why"] else ""))
-        if not e["needs"]:
-            out.append(f"- 🤖 {L['ai']}")
-        for k, p in e["picks"].items():
-            if p["best"]:
-                counts[k] += 1
-                out.append(line(k, p["best"][0]))
-                out += [line(k, b, f"{L['backup']}: ") for b in p["backup"]]
-            else:
-                out.append(f"- {ICON[k]} {L['none']}")
-            out += [line(k, x, f"{L['paid']}: ") for x in p["paid"]]
-        out.append("")
-    out.append(f"**{L['summary']}:** {counts['repo']} 📦 · {counts['connector']} 🔌 · {counts['skill']} 🎓 · "
-               f"{sum(1 for e in kit if not e['needs'])} 🤖")
+        c = e["combo"]
+        if not e["needs"] or not c["kinds"]:
+            kit_txt = L["ai"] if not e["needs"] else L["none"]
+        else:
+            kit_txt = " + ".join(f"{ICON[k]} {e['picks'][k]['best'][0]['name']}" for k in c["kinds"])
+        out.append(f"| {n} | {e['step']} | {kit_txt} | {c.get('score') or ''} | {c.get('why') or e['why']} |")
+    for kind, title in (("repo", L["repos"]), ("skill", L["skills"]), ("connector", L["conns"])):
+        rows = [(n, e) for n, e in enumerate(kit, 1) if kind in e["picks"]]
+        if not rows: continue
+        out += ["", f"## {title}", f"| # | {L['step']} | {L['best']} | {L['backup']} | {L['install']} |", "|---|---|---|---|---|"]
+        for n, e in rows:
+            p = e["picks"][kind]
+            b = p["best"][0] if p["best"] else None
+            extra = (" · " + L["paid"] + ": " + cell(p["paid"][0], kind)) if p["paid"] else ""
+            out.append(f"| {n} | {e['step']} | {cell(b, kind)} | {cell(p['backup'][0] if p['backup'] else None, kind)}{extra} | "
+                       f"{('`' + b['how'] + '`') if b and b.get('how') and b['how'] != '✅' else (L['have'] if b else '')} |")
+    if dead_all:
+        out += ["", f"_{len(dead_all)} {L['dead']}: {', '.join(dead_all[:8])}_"]
     text = "\n".join(out)
     print(text)
     if a.md: Path(a.md).write_text(text)
