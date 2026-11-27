@@ -263,10 +263,20 @@ def main():
     ap.add_argument("--inventory", default=os.environ.get("SOMMELIER_INVENTORY"), help="your connectors (only to mark ✅ yours)")
     ap.add_argument("--min", type=int, default=50, help="minimum points to recommend something (default 50)")
     ap.add_argument("--lang")
+    ap.add_argument("--plan", help="JSON (text or file) with the steps, written by you or your AI agent: "
+                    '{"free": bool, "commercial": bool, "steps": [{"step", "query", "kinds": [repo|connector|skill], "why"}]}')
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--md")
     a = ap.parse_args()
-    lang, free, money, steps = plan(a.goal)
+    if a.plan:   # the plan written by the agent that runs the kit (e.g. Claude), when it knows better or Gemini is down
+        pj = json.loads(Path(a.plan).read_text() if Path(a.plan).exists() else a.plan)
+        g_lang, g_free, g_money = guess(a.goal)
+        lang, free, money, steps = pj.get("lang", g_lang), pj.get("free", g_free), pj.get("commercial", g_money), pj["steps"]
+    else:
+        lang, free, money, steps = plan(a.goal)
+        if steps and all(set(x.get("kinds", [])) == {"repo", "connector", "skill"} and not x.get("why") for x in steps):
+            print("⚠️ Gemini did not answer (quota?): rough automatic plan. For a better kit pass --plan with your own steps:\n"
+                  '  --plan \'{"steps": [{"step": "...", "query": "english words", "kinds": ["repo","skill"], "why": "..."}]}\'', file=sys.stderr)
     free, money = free or a.free, money or a.commercial
     lang = (a.lang or lang or "es")[:2]
     L = T.get(lang, T["es"])
