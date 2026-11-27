@@ -117,3 +117,13 @@ It detects "alternative to X / stop paying X / dejar de pagar X / parar de pagar
 ("alternative to X", "X alternative self-hosted"…) plus the list on openalternative.co, and ranks proven projects
 first (stars weigh more, brand-new repos with < 20 stars lose points, repos that only share the name are pushed down).
 Each real replacement is tagged 🔁.
+
+## 🧰 Kit for a goal (the three finders together)
+`kit.py` (same file in RepoSommelier, MCPSommelier and SkillSommelier) turns a goal into a complete kit:
+it splits the goal into steps and, for each step, gives **only what it needs**: 📦 repo, 🔌 connector, 🎓 skill —
+or 🤖 nothing when the AI does it alone. It respects your conditions: **free** (paid things go to an optional line) and
+**to monetize** (non-commercial licenses are flagged ⛔).
+```bash
+python3 kit.py "I want to make animated videos for free with AI and publish them on YouTube to monetize them" --where cloud
+```
+Needs the three repos side by side (../reposommelier, ../mcpsommelier, ../skillsommelier).

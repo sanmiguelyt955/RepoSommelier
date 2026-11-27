@@ -55,3 +55,11 @@ python3 reposommelier.py "quiero dejar de pagar Notion, Canva y Calendly"   # va
 Detecta «alternativa a X / dejar de pagar X / parar de pagar X / replace X», busca en GitHub y en openalternative.co,
 y pone primero los proyectos probados (las estrellas pesan más; los nuevos con menos de 20 estrellas bajan; los que solo
 comparten el nombre se van abajo). Cada reemplazo real lleva 🔁.
+
+## 🧰 Kit para una meta (los tres buscadores juntos)
+`kit.py` convierte una meta en un kit completo: la parte en pasos y en cada paso da **solo lo que hace falta**
+(📦 repo, 🔌 conector, 🎓 skill o 🤖 nada si la IA lo hace sola). Respeta tus condiciones: **gratis** y **para monetizar**
+(marca ⛔ las licencias no comerciales).
+```bash
+python3 kit.py "quiero hacer videos animados gratis con IA y publicarlos en YouTube para monetizarlos" --where cloud
+```
