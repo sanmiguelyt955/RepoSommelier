@@ -74,7 +74,8 @@ def _gemini_key():
 
 def gemini_json(prompt):
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json"}}).encode()
-    for model in os.environ.get("KIT_MODELS", "gemini-3-flash-preview,gemini-flash-latest").split(","):
+    for attempt, model in enumerate(os.environ.get("KIT_MODELS", "gemini-3-flash-preview,gemini-flash-latest,gemini-3-flash-preview,gemini-flash-latest").split(",")):
+        if attempt: time.sleep(4 * attempt)               # busy or out of quota for a moment: wait and try again
         req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model.strip()}:generateContent",
                                      body, {"Content-Type": "application/json", "x-goog-api-key": _gemini_key()})
         try:
@@ -107,7 +108,9 @@ def plan(goal):
         "\"kinds\": [\"repo\"|\"connector\"|\"skill\"], \"why\": one short sentence in the goal's language}]}. Goal: " + goal)
     if p and p.get("steps"):
         return p.get("lang") or lang, bool(p.get("free")) or free, bool(p.get("commercial")) or money, p["steps"][:7]
-    return lang, free, money, [{"step": goal, "query": goal, "kinds": ["repo", "connector", "skill"], "why": ""}]
+    parts = [x.strip(" .") for x in re.split(r",|;|\by luego\b|\by después\b|\bthen\b|\by que\b|\by\b|\band\b|\be\b", goal) if len(x.strip()) > 8]
+    return lang, free, money, [{"step": x[:60], "query": " ".join(re.findall(r"\w{4,}", x)[:5]), "kinds": ["repo", "connector", "skill"],
+                                "why": ""} for x in (parts or [goal])[:6]]
 
 
 # ---------- 2. search ----------
@@ -165,14 +168,15 @@ def _http(url, data=None, headers=None, timeout=15):
 
 
 def repo_alive(full):
-    r = subprocess.run(["gh", "api", "-X", "GET", "search/repositories", "-f", f"q=repo:{full}",
-                        "--jq", ".items[0] | [.archived, .pushed_at] | @json"], capture_output=True, text=True, timeout=30)
-    try:
-        archived, pushed = json.loads(r.stdout)
-    except Exception:
-        return None
-    if archived: return False
-    return pushed[:4] >= str(time.gmtime().tm_year - 2)
+    """The repo exists and still has its README/SKILL (raw files: no API rate limit). Archived repos say so in GitHub's banner."""
+    codes = []
+    for br in ("main", "master"):
+        for f in ("README.md", "readme.md", "SKILL.md", "README.rst"):
+            st = _http(f"https://raw.githubusercontent.com/{full}/{br}/{f}")
+            if st == 200:
+                return True
+            codes.append(st)
+    return False if codes and all(c == 404 for c in codes) else None
 
 
 def verify(kind, it):
@@ -289,6 +293,14 @@ def main():
                     "{\"drop\": [ids], \"combos\": [{\"step\": number, \"kinds\": [\"repo\"|\"connector\"|\"skill\"], \"why\": \"...\"}]}\n"
                     + json.dumps(listing, ensure_ascii=False)) if listing else None
     drop = set((g or {}).get("drop", []))
+    if g is None:                       # no Gemini: drop tools that share no meaningful word with their step
+        stop = {"with", "from", "para", "with", "your", "tool", "agent", "skill", "server", "and", "the", "los", "las", "del"}
+        for n, e in enumerate(kit):
+            step_w = {w for w in re.findall(r"[a-záéíóúñ]{4,}", (e["step"] + " " + steps[n].get("query", "")).lower()) if w not in stop}
+            for k, p in e["picks"].items():
+                for x in p["best"] + p["backup"] + p["paid"]:
+                    if not step_w & set(re.findall(r"[a-záéíóúñ]{4,}", (x["name"] + " " + (x.get("desc") or "")).lower())):
+                        drop.add(f"{n}|{k}|{x['name']}")
     for n, e in enumerate(kit):
         for k, p in e["picks"].items():
             for part in ("best", "backup", "paid"):
