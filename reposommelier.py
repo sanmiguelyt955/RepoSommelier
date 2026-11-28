@@ -36,7 +36,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -158,7 +158,8 @@ def plan_queries(need):
 # ---------- GitHub (read-only) ----------
 def search(q):
     CACHE.mkdir(parents=True, exist_ok=True)
-    f = CACHE / (re.sub(r"[^a-z0-9]+", "_", q.lower())[:80] + ".json")
+    import hashlib  # clave con el texto completo: si solo se quitan signos, «stars>=» y «stars:>=» colisionan
+    f = CACHE / (re.sub(r"[^a-z0-9]+", "_", q.lower())[:60] + "_" + hashlib.sha1(q.encode()).hexdigest()[:10] + ".json")
     if f.exists() and time.time() - f.stat().st_mtime < 86400:
         return json.loads(f.read_text())
     r = subprocess.run(["gh", "api", "-X", "GET", "search/repositories", "-f", f"q={q}", "-f", "per_page=40"],
@@ -552,6 +553,36 @@ def alternative_sources(product):
         seen.append(full)
     return seen[:20]
 
+BEST_BUCKETS = [  # cada cubeta: cuántas estrellas mínimas y cuán reciente (días). Así no sale solo lo viejo.
+    ("stars:>=20000 pushed:>{d}", 1095), ("stars:>=5000 pushed:>{d}", 365), ("stars:>=1000 pushed:>{d}", 180)]
+
+
+def best_repos(area="all", per=40):
+    """Mejores valorados de GitHub, sin tema: los más estrellados y activos, por cubetas de estrellas.
+    Si hay un área (python, ai, video…), la busca dentro de esa palabra en nombre o descripción."""
+    out, seen = [], set()
+    extra = "" if area in ("", "all", None) else f" {area} in:name,description,topics"
+    for tmpl, dias in BEST_BUCKETS:
+        since = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+        q = tmpl.format(d=since) + extra
+        for r in search(q)[:per]:
+            if r["full_name"] in seen: continue
+            seen.add(r["full_name"]); out.append(r)
+        time.sleep(2.2)
+    return out
+
+
+def best_score(r):
+    """Puntaje de «mejor valorado»: estrellas (log) + actividad + señal de uso (forks, watchers) + licencia limpia."""
+    import math
+    st = r.get("stargazers_count", 0)
+    act = max(0.0, 1 - days(r["pushed_at"]) / 730)          # 1.0 si se actualizó hoy, 0 si hace 2 años o más
+    forks = r.get("forks_count", 0)
+    lic = (r.get("license") or {}).get("spdx_id") or ""
+    lic_ok = 1.0 if lic in ("MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "GPL-3.0", "GPL-2.0", "MPL-2.0") else 0.0
+    return round(math.log10(st + 1) * 20 + act * 15 + math.log10(forks + 1) * 4 + lic_ok * 5, 1)
+
+
 def reject(r):
     if r.get("archived"): return "archived"
     if r.get("fork"): return "fork"
@@ -616,6 +647,9 @@ def main():
     ap.add_argument("--news", action="store_true", help="also look in the news (Hacker News, Lobsters, dev.to) for repos people talk about")
     ap.add_argument("--trending", action="store_true", help="repos of the moment (last 7 days of news), checked against your profile")
     ap.add_argument("--days", type=int, default=120, help="how far back to read the news (default 120; --trending uses 7)")
+    ap.add_argument("--best", nargs="?", const="all", metavar="AREA",
+                    help="the best-rated repos in general, no topic needed (e.g. «dame los mejores repos de GitHub»). "
+                         "Optional AREA narrows it to a language or field (python, ai, video, automation…)")
     ap.add_argument("--md", help="save the table as Markdown")
     ap.add_argument("--json", action="store_true", help="machine-readable output for agents")
     ap.add_argument("--verdict", nargs="+", metavar=("REPO", "good|bad"))
@@ -632,6 +666,28 @@ def main():
         index["verdicts"][repo] = {"verdict": "good" if good else "bad", "note": " ".join(a.verdict[2:]),
                                    "shift": 8 if good else -15, "date": f"{datetime.now():%Y-%m-%d}"}
         INDEX.write_text(json.dumps(index, ensure_ascii=False, indent=1)); print(f"Saved: {repo} = {index['verdicts'][repo]['verdict']}"); return
+    if a.best is not None:
+        area = a.best if a.best != "all" else ""
+        if not a.need:
+            a.need = f"the best-rated open-source repos on GitHub{' for ' + area if area else ''}"
+        items = [r for r in best_repos(area) if not reject(r)]
+        rows = sorted(items, key=best_score, reverse=True)[:a.top]
+        if a.json:
+            print(json.dumps([{"repo": r["full_name"], "stars": r["stargazers_count"], "score": best_score(r),
+                               "license": (r.get("license") or {}).get("spdx_id"), "updated": r["pushed_at"][:10],
+                               "url": r["html_url"], "description": (r.get("description") or "")[:160]} for r in rows],
+                             ensure_ascii=False, indent=1))
+            return
+        print(f"# Mejores valorados{' en ' + area if area else ' de GitHub'} · {datetime.now():%Y-%m-%d}\n")
+        print("| # | Repo | ★ | Puntaje | Licencia | Último cambio | Qué es |")
+        print("|---|---|---|---|---|---|---|")
+        for i, r in enumerate(rows, 1):
+            lic = (r.get("license") or {}).get("spdx_id") or "⚠️ sin licencia"
+            print(f"| {i} | [{r['full_name']}]({r['html_url']}) | {r['stargazers_count']:,} | {best_score(r)} | {lic} | "
+                  f"{r['pushed_at'][:10]} | {(r.get('description') or '')[:90]} |")
+        print("\nPuntaje = estrellas (escala log) + actividad reciente + forks + licencia permisiva. "
+              "Para ver la historia de estrellas de uno: star-history.com/<dueño>/<repo>.")
+        return
     only_trending = a.trending and not a.need
     if only_trending:
         a.need = "the best and most talked-about new open-source repos of the moment"
